@@ -1,8 +1,8 @@
 ---
 layout: post
-title: How can I trust a man who won't eat a good old-fashioned American
+title: Ms. Wren - Seed Inspector
 tags: [frontpage, jekyll, blog]
-image: '/images/posts/3.jpg'
+image: '/images/posts/3.jpeg'
 ---
 
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec diam augue, luctus a lacus vitae, ullamcorper interdum lacus. Sed consequat, nisi non mattis euismod, mi metus venenatis lacus, id feugiat orci mi eu urna. Donec condimentum lacus eget nibh consectetur, ac venenatis erat tristique. Nunc eros metus, venenatis in cursus ut, aliquam eu diam.
