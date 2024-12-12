@@ -7,6 +7,7 @@ image: '/images/posts/1.jpeg'
 
 ```golang
 func main() {
+    fmt.Println("Hello, world!")
 }
 ```
 ##### Todo
