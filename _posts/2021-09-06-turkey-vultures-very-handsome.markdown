@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Turkey Vultures - Very Handsome
+title: Turkey Vulture
 tags: [frontpage, jekyll, blog]
 image: '/images/posts/2.jpeg'
 ---

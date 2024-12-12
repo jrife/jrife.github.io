@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Ms. Wren - Seed Inspector
+title: Carolina Wren
 tags: [frontpage, jekyll, blog]
 image: '/images/posts/3.jpeg'
 ---

@@ -4,4 +4,4 @@ title: About
 image: '/images/pages/about.jpeg'
 ---
 
-Distributed Systems Expert, Kubernetes Aficionado, Bird Enthusiast
+Distributed Systems, Linux Kernel, Birds
