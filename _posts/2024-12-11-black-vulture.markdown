@@ -1,6 +1,6 @@
 ---
 layout: post
-title: Black Vultures
+title: Black Vulture
 tags: [frontpage, jekyll, blog]
 image: '/images/posts/1.jpeg'
 ---
