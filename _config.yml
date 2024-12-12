@@ -7,18 +7,25 @@
 
 # Site settings
 title:       Jordan Rife
-email:       'jrife0@gmail.com'
+email:       'jordan@jrife.io'
 description: 'Software Engineering, Kubernetes, Distributed Systems, Birds...'
 baseurl:     '' # The subpath of your site, e.g. /blog
-url:         'https://jordanrife.com/' # The base hostname & protocol for your site
+url:         'https://jrife.io/' # The base hostname & protocol for your site
 # twitter:     ''
 github:      'https://github.com/jrife'
-instagram:   'https://www.instagram.com/jrife0/'
 # facebook:    ''
 
 markdown:  kramdown
 permalink: pretty
 paginate:  10
+
+kramdown:
+  math_engine: mathjax
+  syntax_highlighter: rouge
+
+highlighter: rouge
+gist:
+  noscript: false
 
 sass:
   style: compressed
