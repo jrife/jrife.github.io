@@ -13,7 +13,9 @@ I wanted a catchy title.
 
 In 6.10 I made a large number of changes to the kernel selftests for BPF
 sockaddr hooks to add regression coverage for a family of issues I fixed in
-prior releases, so lots of ctrl-c+ctrl-v and refactoring of existing test code.
+prior releases, so lots of ctrl-c+ctrl-v and refactoring of existing test code (
+[1](https://lore.kernel.org/bpf/20240510190246.3247730-1-jrife@google.com/T/#u),
+[2](https://lore.kernel.org/bpf/20240429214529.2644801-1-jrife@google.com/T/#u)).
 
 In this post we'll take a look at these issues, how I fixed them, and find out
 a bit more about the interactions between Kubernetes, Cilium, eBPF, and Linux
