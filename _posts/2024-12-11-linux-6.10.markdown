@@ -1,7 +1,7 @@
 ---
 layout: post
 title: How I Became a Top Contributor to The 6.10 Kernel
-tags: [frontpage, kernel, ebpf, blog]
+tags: [kubernetes, kernel, ebpf, networking, storage]
 image: '/images/posts/2.jpeg'
 ---
 
@@ -22,5 +22,7 @@ a bit more about the interactions between Kubernetes, Cilium, eBPF, and Linux
 Kernel, and software-defined storage such as Portworx, Longhorn, etc.
 
 ##### Background
+
+![alt](/images/posts/sds.png)
 
 TODO
