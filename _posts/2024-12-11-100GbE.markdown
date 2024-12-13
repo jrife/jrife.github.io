@@ -1,0 +1,8 @@
+---
+layout: post
+title: 100 GbE
+tags: [frontpage, networking, blog]
+image: '/images/posts/3.jpeg'
+---
+
+TODO: 100 GbE lab setup

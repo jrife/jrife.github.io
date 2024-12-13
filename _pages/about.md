@@ -4,4 +4,4 @@ title: About
 image: '/images/pages/about.jpeg'
 ---
 
-Distributed Systems, Linux Kernel, Birds
+Kubernetes, Linux Kernel, Birds
