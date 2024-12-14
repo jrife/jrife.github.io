@@ -102,23 +102,32 @@ only way to implement this concept. [Cilium](https://cilium.io/)'s socket-LB
 feature implements cluster IP services using [eBPF](https://ebpf.io/) hooks
 that execute on the `connect()`, `sendmsg()`, and `recvmsg()` system calls to
 rewrite the address parameter. Using this approach the socket is connected
-directly to a backend address, requiring no per-packet DNAT. We'll delve a bit
-more into eBPF, these hooks, and their implementation in the Linux kernel below.
+directly to a backend address, requiring no per-packet DNAT.
 
 When disconnected from an NFS server, Linux periodically attempts to reconnect
 to recover the NFS mount. When the NFS server address is a service IP
 reconnection attempts *should* be directed to the new backend once it's ready.
 This worked fine with kube-proxy or when using Cilium *without* socket-LB.
 However, *with* socket-LB NFS mounts would get stuck if the original backend
-was replaced [1](https://github.com/cilium/cilium/issues/21541). This turned out
+was replaced [[1]](https://github.com/cilium/cilium/issues/21541). This turned out
 to be caused by a deeper problem within the Linux kernel impacting the
 interactions between the NFS (SUNRPC) driver and eBPF socket syscall hooks.
 
-##### Exploring The Kernel
+##### eBPF + Socket Syscalls
 
-###### eBPF + Socket Syscalls
+This post isn't intended to be an eBPF primer. For those looking to learn more
+[ebpf.io](https://ebpf.io/) is a good place to start. Suffice it to say that
+eBPF in general is a way to attach small programs to hook points in the kernel
+as a way to observe or influence system behavior in various ways. Here, we'll
+be taking a look at the socket system call hooks used to implement Cilium's
+socket-LB feature to better understand how they work and how they interact with
+other subsystems in the kernel like NFS.
 
-[`connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/socket.c#L2077)
+The NFS reconnection [bug](https://github.com/cilium/cilium/issues/21541) in
+particular was a result of interactions between the SUNRPC module, the module
+that manages client-server communications for NFS, and the eBPF hooks attached
+to the [`connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/socket.c#L2077)
+system call.
 
 ```c
 /*
@@ -181,7 +190,22 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 }
 ```
 
-`inet_stream_connect()`
+Any userspace application wishing to make a connection invokes the `connect()`
+syscall, usually indirectly via glibc or some other language-specific libraries,
+passing in a `struct sockaddr *` containing the address to which it wants to
+connect.
+
+```c
+	err = READ_ONCE(sock->ops)->connect(sock, (struct sockaddr *)address,
+				addrlen, sock->file->f_flags | file_flags);
+```
+
+The actual work gets done inside `__sys_connect_file()` where it calls
+the connection `connect()` function, a member of `sock->ops` which is a
+`struct proto_ops *`. As you might imagine there are different implementations
+of `struct proto_ops *` for different protocol families and protocols.
+[`inet_stream_connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/ipv4/af_inet.c#L742)
+is the implementation of `connect()` for TCP sockets.
 
 ```c
 /*
@@ -319,7 +343,9 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 EXPORT_SYMBOL(inet_stream_connect);
 ```
 
-`sk->sk_prot->pre_connect()`
+The interesting part for us is this section where `__inet_stream_connect()`
+calls `sk->sk_prot->pre_connect()` which in the case of IPv4 TCP sockets
+points to `tcp_v4_pre_connect()`.
 
 ```c
 		if (BPF_CGROUP_PRE_CONNECT_ENABLED(sk)) {
@@ -329,7 +355,9 @@ EXPORT_SYMBOL(inet_stream_connect);
 		}
 ```
 
-`tcp_v4_pre_connect()`
+[`tcp_v4_pre_connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/ipv4/tcp_ipv4.c#L202)
+invokes the BPF hook that can change the the address supplied to the `connect()`
+system call (`uaddr`).
 
 ```c
 static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
@@ -347,5 +375,7 @@ static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
 	return BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr, &addr_len);
 }
 ```
+
+![alt](/images/posts/syscallgraph.png)
 
 TODO
