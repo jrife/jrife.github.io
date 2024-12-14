@@ -181,6 +181,8 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 }
 ```
 
+`inet_stream_connect()`
+
 ```c
 /*
  *	Connect to a remote host. There is regrettably still a little
@@ -317,34 +319,17 @@ int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 EXPORT_SYMBOL(inet_stream_connect);
 ```
 
-```c
-	case SS_UNCONNECTED:
-		err = -EISCONN;
-		if (sk->sk_state != TCP_CLOSE)
-			goto out;
+`sk->sk_prot->pre_connect()`
 
+```c
 		if (BPF_CGROUP_PRE_CONNECT_ENABLED(sk)) {
 			err = sk->sk_prot->pre_connect(sk, uaddr, addr_len);
 			if (err)
 				goto out;
 		}
-
-		err = sk->sk_prot->connect(sk, uaddr, addr_len);
-		if (err < 0)
-			goto out;
-
-		sock->state = SS_CONNECTING;
-
-		if (!err && inet_test_bit(DEFER_CONNECT, sk))
-			goto out;
-
-		/* Just entered SS_CONNECTING state; the only
-		 * difference is that return value in non-blocking
-		 * case is EINPROGRESS, rather than EALREADY.
-		 */
-		err = -EINPROGRESS;
-		break;
 ```
+
+`tcp_v4_pre_connect()`
 
 ```c
 static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
