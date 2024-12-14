@@ -57,12 +57,12 @@ software-defined storage systems.
 
 Simply put, `ReadWriteMany` volumes are volumes that I can read and write to
 from multiple nodes in my cluster at the same time. In theory this says nothing
-about the implementation but under the hood. In practice this usually means NFS,
-SMB, or some distributed file system under the hood. *Technically* you can also
-provision and use a `ReadWriteMany` volume with `volumeMode: Block` provided
-that the underlying CSI driver supports it which allows multiple nodes to access
-a raw block device, but this is much less common and typically access would need
-to be orchestrated at the application level to prevent toe stepping. I digress.
+about the implementation. In practice this usually means NFS, SMB, or some
+distributed file system under the hood. *Technically* you can also provision and
+use a `ReadWriteMany` volume with `volumeMode: Block` provided that the
+underlying CSI driver supports it which allows multiple nodes to access a raw
+block device, but this is much less common and typically access would need to be
+orchestrated at the application level to prevent toe stepping.
 
 ```yaml
 apiVersion: v1
@@ -78,9 +78,17 @@ spec:
       storage: 8Gi
 ```
 
-The above `PersistentVolumeClaim` spec asks Kubernetes to create a volume that
-I can read from and write to concurrently from multiple nodes or pods.
+All of the software-defined storage systems listed above implement
+`ReadWriteMany` storage by creating up a userspace NFS server
+(e.g. [`nfs-ganesha`](https://github.com/nfs-ganesha/nfs-ganesha)) as a pod
+beind a clusterIP [service](https://kubernetes.io/docs/concepts/services-networking/service/).
 
 ![alt](/images/posts/sds.png)
+
+In this architecture the service is used purely to provide a stable IP address
+for the NFS mounts. If the NFS server pod needs to be replaced by the storage
+system due to node restarts, pod deletions, etc. this allows any mounts to
+recover as reconnection attempts on the client will be redirected to the new
+backend.
 
 TODO
