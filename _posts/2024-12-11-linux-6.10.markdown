@@ -21,7 +21,30 @@ In this post we'll take a look at these issues, how I fixed them, and find out
 a bit more about the interactions between Kubernetes, Cilium, eBPF, and Linux
 Kernel, and software-defined storage such as Portworx, Longhorn, etc.
 
-##### Background
+##### The Problem
+
+Storage is an important component in many Kubernetes setups. There are a wide
+variety of [CSI](https://kubernetes-csi.github.io/docs/) drivers that can
+provide persistent storage to your cluster. These days, most storage appliance
+vendors provide some CSI driver that enables Kubernetes clusters to connect to
+their storage system. Some examples include:
+
+* [Trident](https://docs.netapp.com/us-en/netapp-solutions/containers/rh-os-n_overview_trident.html)
+  is NetApp's CSI driver.
+* [CSI Powerstore](https://github.com/dell/csi-powerstore) is the CSI driver for
+  Dell Powerstore.
+* [Synology CSI](https://github.com/SynologyOpenSource/synology-csi) is the CSI
+  driver for Synology NAS.
+
+These drivers manage a storage appliance on behalf of a Kubernetes cluster to
+make sure that `PersistentVolumeClaims`, `VolumeSnapshots`, etc. *just work*.
+
+*Software defined* storage systems such as [Longhorn](https://longhorn.io/),
+[Portworx](https://portworx.com/), and [Robin](https://docs.robin.io/) provide
+persistent storage to a Kubernetes cluster without a dedicated external storage
+appliance. With these systems, data often lives on the the cluster nodes with
+the storage system handling persistence, replication, and availability of data
+across the cluster.
 
 ![alt](/images/posts/sds.png)
 
