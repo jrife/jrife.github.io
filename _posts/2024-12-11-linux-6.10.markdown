@@ -80,7 +80,7 @@ spec:
 
 All of the software-defined storage systems listed above implement
 `ReadWriteMany` storage by creating up a userspace NFS server
-(e.g. [`nfs-ganesha`](https://github.com/nfs-ganesha/nfs-ganesha)) as a pod
+(e.g. [nfs-ganesha](https://github.com/nfs-ganesha/nfs-ganesha)) as a pod
 beind a clusterIP [service](https://kubernetes.io/docs/concepts/services-networking/service/).
 
 ![alt](/images/posts/sds.png)
@@ -91,16 +91,27 @@ system due to node restarts, pod deletions, etc. this allows any mounts to
 recover as reconnection attempts on the client will be redirected to the new
 backend.
 
-Traditionally, clusterIP services were implemented by [`kube-proxy`](https://kubernetes.io/docs/reference/command-line-tools-reference/kube-proxy/),
-a daemon that runs on each node in the cluster. `kube-proxy` creates iptables
+![alt](/images/posts/failover.png)
+
+Traditionally, clusterIP services were implemented by [kube-proxy](https://kubernetes.io/docs/reference/command-line-tools-reference/kube-proxy/),
+a daemon that runs on each node in the cluster. kube-proxy creates iptables
 rules for each service that DNAT a service's clusterIP (e.g. `10.0.0.80` in the
 diagram above) to an endpoint IP (e.g. `192.168.0.54`). Netfilter then replaces
 the service IP with an endpoint IP for each packet. However, this isn't the
-only way to implement this concept. [Cilium](https://cilium.io/)'s kube-proxy
-replacement implements cluster IP services using [eBPF](https://ebpf.io/) hooks
-that execute on the `connect()`, `sendmsg()`, and `recvmsg()` system calls which
+only way to implement this concept. [Cilium](https://cilium.io/)'s socket-LB
+feature implements cluster IP services using [eBPF](https://ebpf.io/) hooks
+that execute on the `connect()`, `sendmsg()`, and `recvmsg()` system calls to
 rewrite the address parameter. Using this approach the socket is connected
 directly to a backend address, requiring no per-packet DNAT. We'll delve a bit
 more into eBPF, these hooks, and their implementation in the Linux kernel below.
+
+When disconnected from an NFS server, Linux periodically attempts to reconnect
+to recover the NFS mount. When the NFS server address is a service IP
+reconnection attempts *should* be directed to the new backend once it's ready.
+This worked fine with kube-proxy or when using Cilium *without* socket-LB.
+However, *with* socket-LB NFS mounts would get stuck if the original backend
+was replaced [1](https://github.com/cilium/cilium/issues/21541). This turned out
+to be caused by a deeper problem within the Linux kernel impacting the
+interactions between the NFS (SUNRPC) driver and eBPF socket syscall hooks.
 
 TODO
