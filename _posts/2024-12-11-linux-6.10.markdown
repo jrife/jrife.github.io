@@ -91,4 +91,16 @@ system due to node restarts, pod deletions, etc. this allows any mounts to
 recover as reconnection attempts on the client will be redirected to the new
 backend.
 
+Traditionally, clusterIP services were implemented by [`kube-proxy`](https://kubernetes.io/docs/reference/command-line-tools-reference/kube-proxy/),
+a daemon that runs on each node in the cluster. `kube-proxy` creates iptables
+rules for each service that DNAT a service's clusterIP (e.g. `10.0.0.80` in the
+diagram above) to an endpoint IP (e.g. `192.168.0.54`). Netfilter then replaces
+the service IP with an endpoint IP for each packet. However, this isn't the
+only way to implement this concept. [Cilium](https://cilium.io/)'s kube-proxy
+replacement implements cluster IP services using [eBPF](https://ebpf.io/) hooks
+that execute on the `connect()`, `sendmsg()`, and `recvmsg()` system calls which
+rewrite the address parameter. Using this approach the socket is connected
+directly to a backend address, requiring no per-packet DNAT. We'll delve a bit
+more into eBPF, these hooks, and their implementation in the Linux kernel below.
+
 TODO
