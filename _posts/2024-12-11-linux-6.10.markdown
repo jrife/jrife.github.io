@@ -39,12 +39,47 @@ their storage system. Some examples include:
 These drivers manage a storage appliance on behalf of a Kubernetes cluster to
 make sure that `PersistentVolumeClaims`, `VolumeSnapshots`, etc. *just work*.
 
-*Software defined* storage systems such as [Longhorn](https://longhorn.io/),
+*Software-defined* storage systems such as [Longhorn](https://longhorn.io/),
 [Portworx](https://portworx.com/), and [Robin](https://docs.robin.io/) provide
 persistent storage to a Kubernetes cluster without a dedicated external storage
 appliance. With these systems, data often lives on the the cluster nodes with
 the storage system handling persistence, replication, and availability of data
 across the cluster.
+
+In Kubernetes volumes have an [*access mode*](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
+which specifies how a volume can be mounted. For the purposes of this discussion
+we'll focus on `ReadWriteMany` volumes and how they are implemented in these
+software-defined storage systems.
+
+> **ReadWriteMany**
+>
+> the volume can be mounted as read-write by many nodes.
+
+Simply put, `ReadWriteMany` volumes are volumes that I can read and write to
+from multiple nodes in my cluster at the same time. In theory this says nothing
+about the implementation but under the hood. In practice this usually means NFS,
+SMB, or some distributed file system under the hood. *Technically* you can also
+provision and use a `ReadWriteMany` volume with `volumeMode: Block` provided
+that the underlying CSI driver supports it which allows multiple nodes to access
+a raw block device, but this is much less common and typically access would need
+to be orchestrated at the application level to prevent toe stepping. I digress.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-pvc
+spec:
+  accessModes:
+  - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 8Gi
+```
+
+The above `PersistentVolumeClaim` spec asks Kubernetes to create a volume that
+I can read from and write to concurrently from multiple nodes or pods.
 
 ![alt](/images/posts/sds.png)
 
