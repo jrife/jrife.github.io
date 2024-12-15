@@ -79,7 +79,7 @@ spec:
 ```
 
 All of the software-defined storage systems listed above implement
-`ReadWriteMany` storage by creating up a userspace NFS server
+`ReadWriteMany` storage by creating up a user space NFS server
 (e.g. [nfs-ganesha](https://github.com/nfs-ganesha/nfs-ganesha)) as a pod
 beind a clusterIP [service](https://kubernetes.io/docs/concepts/services-networking/service/).
 
@@ -99,7 +99,7 @@ rules for each service that DNAT a service's clusterIP (e.g. `10.0.0.80` in the
 diagram above) to an endpoint IP (e.g. `192.168.0.54`). Netfilter then replaces
 the service IP with an endpoint IP for each packet. However, this isn't the
 only way to implement this concept. [Cilium](https://cilium.io/)'s socket-LB
-feature implements cluster IP services using [eBPF](https://ebpf.io/) hooks
+feature implements clusterIP services using [eBPF](https://ebpf.io/) hooks
 that execute on the `connect()`, `sendmsg()`, and `recvmsg()` system calls to
 rewrite the address parameter. Using this approach the socket is connected
 directly to a backend address, requiring no per-packet DNAT.
@@ -190,10 +190,14 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 }
 ```
 
-Any userspace application wishing to make a connection invokes the `connect()`
+Any user space application wishing to make a connection invokes the `connect()`
 syscall, usually indirectly via glibc or some other language-specific libraries,
 passing in a `struct sockaddr *` containing the address to which it wants to
-connect.
+connect. OK, to be precise you can use the kernel's [`io_uring`](https://man7.org/linux/man-pages/man7/io_uring.7.html)
+interface as well to interact with sockets, but let's ignore that for now. Note
+that `__sys_connect()` actually moves the address from user space into
+kernel space, copying the contents of `*uservaddr` into `address` before passing
+a pointer to this copy down the stack.
 
 ```c
 	err = READ_ONCE(sock->ops)->connect(sock, (struct sockaddr *)address,
@@ -376,6 +380,166 @@ static int tcp_v4_pre_connect(struct sock *sk, struct sockaddr *uaddr,
 }
 ```
 
+To summarize, `BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr, &addr_len)` can
+rewrite the address stored at `uaddr`, a pointer to the `address` variable
+inside `__sys_connect()`.
+
 ![alt](/images/posts/syscallgraph.png)
+
+If you try to connect to a the cluster IP of a service the address is rewritten
+to one of that service's endpoint addresses. All of this works pretty seamlessly
+for user space applications, but for NFS mounts to service IPs there's a catch.
+
+##### NFS (SUNRPC) + eBPF
+
+The SUNRPC forms the foundation for communications between NFS clients and
+servers. It implements the logic for forming connections and sending RPC calls
+back and forth.
+
+```c
+static int xs_tcp_finish_connecting(struct rpc_xprt *xprt, struct socket *sock)
+{
+	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
+
+	if (!transport->inet) {
+		struct sock *sk = sock->sk;
+
+		/* Avoid temporary address, they are bad for long-lived
+		 * connections such as NFS mounts.
+		 * RFC4941, section 3.6 suggests that:
+		 *    Individual applications, which have specific
+		 *    knowledge about the normal duration of connections,
+		 *    MAY override this as appropriate.
+		 */
+		if (xs_addr(xprt)->sa_family == PF_INET6) {
+			ip6_sock_set_addr_preferences(sk,
+				IPV6_PREFER_SRC_PUBLIC);
+		}
+
+		xs_tcp_set_socket_timeouts(xprt, sock);
+		tcp_sock_set_nodelay(sk);
+
+		lock_sock(sk);
+
+		xs_save_old_callbacks(transport, sk);
+
+		sk->sk_user_data = xprt;
+		sk->sk_data_ready = xs_data_ready;
+		sk->sk_state_change = xs_tcp_state_change;
+		sk->sk_write_space = xs_tcp_write_space;
+		sk->sk_error_report = xs_error_report;
+		sk->sk_use_task_frag = false;
+
+		/* socket options */
+		sock_reset_flag(sk, SOCK_LINGER);
+
+		xprt_clear_connected(xprt);
+
+		/* Reset to new socket */
+		transport->sock = sock;
+		transport->inet = sk;
+
+		release_sock(sk);
+	}
+
+	if (!xprt_bound(xprt))
+		return -ENOTCONN;
+
+	xs_set_memalloc(xprt);
+
+	xs_stream_start_connect(transport);
+
+	/* Tell the socket layer to start connecting... */
+	set_bit(XPRT_SOCK_CONNECTING, &transport->sock_state);
+	return kernel_connect(sock, xs_addr(xprt), xprt->addrlen, O_NONBLOCK);
+}
+```
+
+[`xs_tcp_finish_connecting()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/sunrpc/xprtsock.c#L2338)
+is where the module actually establishes a connection with a function called
+`kernel_connect()`. This being kernel space, we don't invoke system calls
+directly as a user space application would. Instead, there are several kernel
+space equivalents defined in [`net/socket.c`](https://github.com/torvalds/linux/blob/master/net/socket.c)
+for manipulating sockets namely `kernel_bind()`, `kernel_listen()`,
+`kernel_accept()`, `kernel_connect()`, `kernel_getsockname()`,
+`kernel_getpeername()`, `kernel_sendmsg()`, `sock_sendmsg()`, and
+`kernel_recvmsg()`.
+
+```c
+/**
+ *	kernel_connect - connect a socket (kernel space)
+ *	@sock: socket
+ *	@addr: address
+ *	@addrlen: address length
+ *	@flags: flags (O_NONBLOCK, ...)
+ *
+ *	For datagram sockets, @addr is the address to which datagrams are sent
+ *	by default, and the only address from which datagrams are received.
+ *	For stream sockets, attempts to connect to @addr.
+ *	Returns 0 or an error code.
+ */
+
+int kernel_connect(struct socket *sock, struct sockaddr *addr, int addrlen,
+		   int flags)
+{
+	return READ_ONCE(sock->ops)->connect(sock, (struct sockaddr *)&address,
+					     addrlen, flags);
+}
+EXPORT_SYMBOL(kernel_connect);
+```
+
+[`kernel_connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/socket.c#L3618)
+in its original form (i.e. before I fixed it) simply invoked `connect()` like we
+saw in `__sys_connect_file()`. `addr` is just a pointer to whatever parameter
+the caller passes to `kernel_connect()`. As we know from the code above,
+however, any BPF hooks that execute inside `tcp_v4_pre_connect()` may overwrite
+the contents of `*addr`!
+
+```c
+  return kernel_connect(sock, xs_addr(xprt), xprt->addrlen, O_NONBLOCK);
+```
+
+Looking again at the call to `kernel_connect()` inside
+`xs_tcp_finish_connecting()` we can quickly see what the issue is.
+
+```c
+static inline struct sockaddr *xs_addr(struct rpc_xprt *xprt)
+{
+	return (struct sockaddr *) &xprt->addr;
+}
+```
+
+It so happens that the pointer being passed to the `addr` parameter of
+`kernel_connect()` points to the server address of the NFS mount. With storage
+systems like those described above this would be the cluster IP of the service
+associated with a particular `ReadWriteMany` volume's NFS backend. When a mount
+is created on a cluster node and the initial connection attempt is made Cilium's
+BPF hooks would permanently rewrite the mount address to the initial NFS server
+pod's IP. If this pod ever went away and was replaced by a new pod with a new
+IP, the NFS mount would break forever trying to reconnect to the original pod's
+IP. Running `mount` you could even see that the IP address printed for these
+NFS mounts was the *pod* IP instead of the *service* IP.
+
+This was certainly problematic. The introduction of these BPF hooks had turned
+`addr` into a mutable parameter breaking the expectations of code that used
+functions like `kernel_connect()`. The fix itself was simple, just make a copy
+of `*addr` to insulate callers of `kernel_connect()` from the effects of the BPF
+hooks. This is just what my [initial patch](https://lore.kernel.org/netdev/20230821214523.720206-1-jrife@google.com/)
+did.
+
+```
+ int kernel_connect(struct socket *sock, struct sockaddr *addr, int addrlen,
+ 		   int flags)
+ {
+-	return READ_ONCE(sock->ops)->connect(sock, addr, addrlen, flags);
++	struct sockaddr_storage address;
++
++	memcpy(&address, addr, addrlen);
++
++	return READ_ONCE(sock->ops)->connect(sock, (struct sockaddr *)&address,
++					     addrlen, flags);
+ }
+ EXPORT_SYMBOL(kernel_connect);
+```
 
 TODO
