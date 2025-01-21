@@ -1,8 +1,166 @@
 ---
 layout: post
-title: 100 GbE
-tags: [frontpage, networking, blog]
+title: 100 GbE Lab
+tags: [frontpage, networking, 100GbE, blog]
 image: '/images/posts/3.jpeg'
 ---
 
-TODO: 100 GbE lab setup
+I've been meaning to set up a 100 gigabit home lab for a while to learn and
+explore the world of high speed networking, and I've finally finished it! In
+this post I'll give an overview of how I built a relatively minmal 100GbE lab
+from conception to implementation to testing. I'll explore some of the gotchas
+and challenges in setting up a stable foundation for 100 gigabit testing.
+
+##### Requirements
+
+* **Discrete**: My apartment already has too much clutter. I didn't want to put
+  a server rack in the middle of the bedroom I use as my home office, and I
+  barely have space for my own clothes in my closet let alone a bunch of
+  computer equipment :). This stuff would have to go on top of or under my desk,
+  so I wanted something that was quiet and elegant looking.
+* **Remotely Managed**: I wanted to be able to completely manage my lab when
+  I'm not at home and recover from any issues that might otherwise require
+  physical access. I like to tinker with the kernel; if I do something stupid
+  and a server won't boot up anymore I want to be able to fix it. I decided
+  [IPMI](https://en.wikipedia.org/wiki/Intelligent_Platform_Management_Interface)
+  was a must.
+* **100 GbE**: I wanted a platform capable of saturating a 100 gigabit link
+  between two machines. In particuar, I wanted to be able to saturate, or come
+  close to saturating, a 100 gigabit link with a single core, since it would make
+  observing the effects of small tweaks and changes quite clear to see as I
+  pushed the limits of what the hardware could do. High clock speed and IPC was
+  my priority when selecting a CPU. I also needed two 100 GbE NICs and a
+  motherboard with enough PCIe lanes to make full use of the NIC.
+* **Budget**: Around $4000 was my budget for the build.
+
+##### The Build
+
+###### Choosing A Case
+I wanted something discrete that didn't scream "server". Something unobtrusive
+that wouldn't look too out of place on top of or under my desk. This narrowed it
+down to a normal PC case. Moreover, I wanted a smaller form factor since I'd
+have two of these things side-by-side. The Lian Li A3-mATX caught my eye as a
+budget option that fit my criteria.
+
+###### Choosing A CPU
+I immediately gravitated towards AMD's more recent 9000 series CPUs. They
+featured a high base clock speed (~4.4 GHz) and turbo boost up to ~5.5 GHz) with
+the potential for more overclocking if needed. The benchmarks I read online
+boasted impressive single-core performance compared to their older counterparts.
+I took a brief look into AMD's EPYC line of CPUs, but compared to the Ryzen 9000
+I couldn't find the right balance of high base clock speed, core count, and
+cost. Not to mention most of the EPYC line of CPUs raise the cost of the
+motherboard as well for features I didn't need (e.g. 4 PCIe 5.0 x16 slots).
+
+The Ryzen 9 9950X provided four additional cores compared to the Ryzen 9 9900x,
+but cost $200 more. I decided 12 cores was more than enough and went with the
+9900x.
+
+###### Choosing A Motherboard
+ASRock Rack's B650D4U line of server motherboards was a perfect fit for my
+build. It's a standard mATX form factor that would fit nicely in my case with
+built-in IPMI and support for Ryzen 9000 series CPUs. It was a no-brainer
+considering my requirements and other choices. The more expensive B650D4U-2L2T
+variant included two RJ45 10GbE ports but was $200 more expensive. I decided on
+the B650D4U base model which only supports 1GbE out of the box, since I planned
+on installing my own NIC anyway.
+
+###### Choosing A NIC
+I really only considered Mellanox cards, as I had some previous experience with
+them. Beyond the obvious need for 100 GbE I wanted a card that at least
+supported SR-IOV and RoCE, two features I wanted to play around and experiment
+with. Dual port was a bonus if I could find it for the right price, as I wanted
+to play around with redundant and multipath setups. The Mellanox MCX516A-CCAT
+fit the bill, and I was able to find a good deal through Server Supply.
+
+![alt](/images/posts/3/cards.jpeg)
+
+###### Choosing A Switch
+As of the time of me writing this, the MikroTik CRS504-4XQ-IN really is the only
+game in town as far as affordable 100 gigabit networking goes. Strictly
+speaking, I didn't *need* a switch but wanted one anyway for the future
+possibilities that it offers.
+
+I nalso eeded a cheap 1 GbE switch to connect the built-in 1 GbE management and
+data ports of each machine to my home network. The 100 GbE network would remain
+isolated for the time being.
+
+###### Memory
+I just looked for whatever I could find for cheap. I found a local supplier of
+server memory on eBay called [Memory Bay](https://www.membay.com/). I wanted
+at least 32 GB of memory per machine to start with. It gave me enough head room
+to run a few VMs if I wanted without breaking the bank.
+
+###### Cooling
+I just bought a standard CPU cooler and case fans. One special consideration I
+needed to make was cooling for the NICs themselves. With a passive cable, the
+MCX516A-CCAT calls for 350LFM of airflow. Typically, these are installed into a
+server chassis with a lot more airflow than my Lian Li A3-mATX and Thermalright
+TL-C12C case fans would offer. I would need to actively cool the NICs somehow.
+I decided on the tried and true method of zip tying a 40mm Noctua PWMNF-A4x20
+PWM fan directly to the NIC's heat sink. This later proved to be effective.
+
+![alt](/images/posts/3/ziptie.jpeg)
+
+Here's the network card installed in an older PC I built. I was doing some
+thermal testing to make sure the fan was keeping the NIC cool enough before the
+rest of the parts arrived for my new build.
+
+###### Bill Of Materials
+
+| Component             | Type                                             | Quantity | Price         |
+| --------------------- | ------------------------------------------------ | -------- | ------------- |
+| Case                  | Lian Li A3-mATX                                  | 2        | $69.99        |
+| Case Fan (x3)         | Thermalright TL-C12C X3                          | 2        | $12.90        |
+| Motherboard           | AsRock Rack B650D4U                              | 2        | $294.00       | 
+| Power Supply          | Corsair RM750e                                   | 2        | $99.99        |
+| CPU                   | AMD Ryzen 9 9900X                                | 2        | $439.00       |
+| CPU Cooler            | Thermalright Peerless Assassin 120 SE            | 2        | $34.90        |
+| Memory                | 4x16GB DDR5-4800 non-ECC UDIMM Hynix IC RAM      | 1        | $225.60       |
+| SSD                   | Kingston NV2 1TB M.2 2280 NVMe Internal SSD      | 2        | $63.97        |
+| Cat 8 RJ45 Cable      | UGREEN Cat 8 Ethernet Cable 6FT                  | 2        | $5.82         |
+| QSFP28 100G DAC Cable | 1m (3ft) NVIDIA/Mellanox MCP1600-C001 Compatible | 2        | $32.00        |
+| 100 GbE NIC           | NVIDIA Mellanox MCX516A-CCAT                     | 2        | $580.00       |
+| NIC Fan               | Noctua PWMNF-A4x20 PWM                           | 2        | $14.95        |
+| Zip Ties (x400)       | -                                                | 1        | $5.99         |
+| 1 GbE Switch          | TP-Link TL-SG108E                                | 1        | $29.99        |
+| 100 GbE Switch        | MikroTik CRS504-4XQ-IN                           | 1        | $641.36       |
+|                       |                                                  |          | **$4,197.98** |
+
+All told, the total came in at $4,197.98, but considering I was gifted some of
+the components for Christmas I'll cheat and say I came in under budget. As I
+mentioned, I could have gotten by without the MikroTik which would have brought
+the total down to $3,556.62, but I wanted it :).
+
+###### The Result
+
+![alt](/images/posts/3/workspace1.jpeg)
+
+The look is fairly clean and unobtrusive. Even with both machines on, the noise
+level is hardly noticeable. The loudest part of the setup is actually the fans
+on the MikroTik which I have under my desk. Eventually I want to see if I can
+replace its fans with something quieter. 
+
+![alt](/images/posts/3/front-machines.jpeg)
+
+On the back you can see the two RJ45 ethernet cables leading from the management
+and data ports back to the 1 GbE switch connected to my home network. On the
+bottom you can see the QSFP28 DAC cables connecting each box to the 100 GbE
+switch.
+
+![alt](/images/posts/3/back.jpeg)
+
+I have one connection from the MikroTik's management port to the 1 GbE switch,
+so that I can access the RouterOS admin interface. However, this port is not
+bridged with the QSFP28 ports on the switch. 
+
+![alt](/images/posts/3/switches.jpeg)
+
+The switches sit on top of my old gaming PC build under my desk. I repurposed
+that machine as a jumpbox, providing a Cloudflare tunnel into my home network
+and allowing me to connect remotely. For the most part, this box stays up even
+if I tinker with the other two.
+
+##### Benchmarking
+
+TODO
