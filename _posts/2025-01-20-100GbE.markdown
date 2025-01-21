@@ -81,7 +81,7 @@ game in town as far as affordable 100 gigabit networking goes. Strictly
 speaking, I didn't *need* a switch but wanted one anyway for the future
 possibilities that it offers.
 
-I nalso eeded a cheap 1 GbE switch to connect the built-in 1 GbE management and
+I also needed a cheap 1 GbE switch to connect the built-in 1 GbE management and
 data ports of each machine to my home network. The 100 GbE network would remain
 isolated for the time being.
 
@@ -132,6 +132,26 @@ the components for Christmas I'll cheat and say I came in under budget. As I
 mentioned, I could have gotten by without the MikroTik which would have brought
 the total down to $3,556.62, but I wanted it :).
 
+###### Putting It All Together
+
+Assembling everything was fairly mechanical. I installed the CPU, CPU cooler,
+memory, NVMe drive, fans, etc. However, getting the first machine to boot proved
+to be a challenge. I knew ahead of time that I would need to update the BIOS
+before the system would post, as support for Ryzen 9000 series CPUs was only
+introduced recently in version 20.01 of the [B650D4U BIOS](https://www.asrockrack.com/general/productdetail.asp?Model=B650D4U#Download). However, I couldn't even get a boot screen on an
+external monitor or access the IPMI interface to flash a new BIOS image. I
+assembled everything outside the case and *was* able to access the IPMI
+interface to update the BIOS. I thought maybe it was just a fluke and maybe I
+hadn't plugged something in all the way, so I moved everything back into the
+case. But I had the same issue. After spending hours checking everything I
+suspected a short. I noticed that when I unscrewed the motherboard and it lost
+contact with the standoff screws IPMI would come up again. After much trial and
+error I noticed a slight scratch around the middle standoff screw on the back
+of the board, so I removed it completely and tried again. After that I didn't
+have any problems and was able to finish the build of the first machine. I built
+the second machine without any issues. I was much more careful not to damage
+the motherboard while I was putting it into the case.
+
 ###### The Result
 
 ![alt](/images/posts/3/workspace1.jpeg)
@@ -161,6 +181,105 @@ that machine as a jumpbox, providing a Cloudflare tunnel into my home network
 and allowing me to connect remotely. For the most part, this box stays up even
 if I tinker with the other two.
 
-##### Benchmarking
+![alt](/images/posts/3/inside.jpeg)
 
-TODO
+And here's a look inside the case of the final build. You can see the Mellanox
+card with the zip-tied fan. I only did enough cable management to keep the
+cables from touching the fans inside the case.
+
+##### Testing
+
+###### Configuring The MikroTik
+
+The first thing I did was make sure to update RouterOS to the latest version.
+This amounted to downloading an image, uploading it to the switch through the
+RouterOS web UI, and rebooting it. Next, I wanted to enable jumbo frames to give
+myself the best chance of pushing 100 gigabits. To do this, I first set the MTU
+of the default bridge to 9000. 
+
+![alt](/images/posts/3/bridge-mtu.png)
+
+Next, I matched the MTU of each of the interfaces to that of the bridge.
+
+![alt](/images/posts/3/interface-mtu.png)
+
+RouterOS splits each physical QSFP28 port as four logical ports. If you're not
+using a breakout cable to divide each port into two 50 Gb links or four 25 Gb
+links you can ignore everything except qsfp28-1-1, qsfp28-2-1, etc.
+
+![alt](/images/posts/3/interface-list.png)
+
+###### Thermal Performance
+Before doing any serious benchmarking I wanted to test the thermals. I was less
+concerned with CPU thermals than NIC thermals. The
+[spec sheet](https://docs.nvidia.com/networking/display/connectx5en/specifications#src-6881631_Specifications-MCX516A-CCATandMCX516A-CCHTSpecifications)
+lists the operational temperature for the MCX516A-CCAT as 0°C to 55°C (32°F to
+131°F). I suspected that I would need to actively cool the NIC to keep its
+temperature within this range. To start, I simply installed the NIC without
+any modification. Almost immediately after booting up and logging in I checked
+the temperature.
+
+```
+jordan@vulture:~$ sensors -f
+...
+mlx5-pci-0100
+Adapter: PCI adapter
+sensor0:     +165.2°F  (crit = +221.0°F, highest = +165.2°F)
+```
+
+It was running way outside the specified range. I turned everything off to avoid
+possibly damaging the card. I zip tied the 40mm Noctua fan onto the NIC's heat
+sink and configured it to run at max speed before trying again.
+
+![alt](/images/posts/3/fan.png)
+
+The card then operated at a frosty 113°F. Even under load the temperature
+remained steady. Even at full speed I barely registered the extra noise. The
+CPU remained similarly cool.
+
+```
+jordan@vulture:~$ sensors -f
+...
+mlx5-pci-0100
+Adapter: PCI adapter
+sensor0:     +113.0°F  (crit = +221.0°F, highest = +113.0°F)
+```
+
+To anybody else trying this, I'd plan on strapping a fan to your NIC as well
+unless you want to run your case fans at high speeds.
+
+###### Initial iperf3 Tests (Make Sure Things Are Plugged In)
+
+My initial iperf3 tests were disappointing. I couldn't push more than 25 Gbps
+between machines. I tried unplugging from the switch and directly connecting
+my two servers with a DAC cable, but the result was the same. CPU utilization
+on both machines remained low; no single core more than ~25% active, so a CPU
+bottleneck seemed unlikely. I tried running two instances of iperf3 across
+different cores, but the aggregate throughput was still only ~25 Gbps. After an
+hour of trying various tuning options and thinking I might have defective cards
+I spotted this in the output of `lspci`.
+
+```
+        LnkSta:    Speed 8GT/s, Width x4 (downgraded)
+            TrErr- Train- SlotClk+ DLActive- BWMgmt- ABWMgmt-
+```
+
+I only saw this on one of the machines. It seemed that only four of the 16 PCIe
+lanes of the card were being used, so it would make sense that my bandwidth was
+about 25% of the total capacity as well. I suspected an
+[ID10T](https://en.wikipedia.org/wiki/User_error) error. Sure enough, I opened
+up the case of the offending machine, pushed on the card a bit, and heard a nice
+click. After booting the machine back up `lspci` showed all 16 lanes in use.
+
+I was finally able to get ~100 Gbps of throughput across two iperf3 instances.
+
+```
+s2:  [SUM]   0.00-60.00  sec   310 GBytes  44.4 Gbits/sec  80638             sender
+s2:  [SUM]   0.00-60.00  sec   310 GBytes  44.4 Gbits/sec                  receiver
+...
+s1:  [SUM]   0.00-60.00  sec   369 GBytes  52.8 Gbits/sec  96155             sender
+s1:  [SUM]   0.00-60.00  sec   369 GBytes  52.8 Gbits/sec                  receiver
+```
+
+* TODO: Tinkering with IRQ affinity
+* TODO: Effects of core-to-core latency.
