@@ -20,9 +20,9 @@ and challenges in setting up a stable foundation for 100 gigabit testing.
   so I wanted something that was quiet and elegant looking.
 * **Remotely Managed**: I wanted to be able to completely manage my lab when
   I'm not at home and recover from any issues that might otherwise require
-  physical access. I like to tinker with the kernel; if I do something stupid
-  and a server won't boot up anymore I want to be able to fix it. I decided
-  [IPMI](https://en.wikipedia.org/wiki/Intelligent_Platform_Management_Interface)
+  physical access to fix. I like to tinker with the kernel; if I do something
+  stupid and a server won't boot up anymore I want to be able to fix it. I
+  decided [IPMI](https://en.wikipedia.org/wiki/Intelligent_Platform_Management_Interface)
   was a must.
 * **100 GbE**: I wanted a platform capable of saturating a 100 gigabit link
   between two machines. In particuar, I wanted to be able to saturate, or come
@@ -253,8 +253,8 @@ unless you want to run your case fans at high speeds.
 My initial iperf3 tests were disappointing. I couldn't push more than 25 Gbps
 between machines. I tried unplugging from the switch and directly connecting
 my two servers with a DAC cable, but the result was the same. CPU utilization
-on both machines remained low; no single core more than ~25% active, so a CPU
-bottleneck seemed unlikely. I tried running two instances of iperf3 across
+on both machines remained low; no single core was more than ~25% active, so a
+CPU bottleneck seemed unlikely. I tried running two instances of iperf3 across
 different cores, but the aggregate throughput was still only ~25 Gbps. After an
 hour of trying various tuning options and thinking I might have defective cards
 I spotted this in the output of `lspci`.
@@ -272,14 +272,173 @@ up the case of the offending machine, pushed on the card a bit, and heard a nice
 click. After booting the machine back up `lspci` showed all 16 lanes in use.
 
 I was finally able to get ~100 Gbps of throughput across two iperf3 instances.
+I plugged everything back into the switch and was able to get a similar result.
+
+###### Tuning Single-Core Performance
+
+Now that I knew I could push 100 Gbps through my network cards and switch I went
+back to single-core benchmarking. I wanted to make sure I had a stable and
+consistent single-core baseline on top of which to test. Without a clean signal
+it would be hard to measure the effects of other modifications to configuration,
+the kernel, etc. that I wanted to make.
+
+I observed extremely inconsistent results between runs. These generally fell
+into three buckets: *worst (~65 Gbps)*, *better (~83 Gbps)*, and
+*best (~99 Gbps)*.
+
+**Worst**
+```
+jordan@crow:~$ iperf3 -c 192.168.88.3 -t 10
+Connecting to host 192.168.88.3, port 5201
+[  5] local 192.168.88.2 port 57434 connected to 192.168.88.3 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  7.47 GBytes  64.2 Gbits/sec    7   2.49 MBytes       
+[  5]   1.00-2.00   sec  7.53 GBytes  64.7 Gbits/sec    4   2.77 MBytes       
+[  5]   2.00-3.00   sec  7.53 GBytes  64.7 Gbits/sec   13   3.15 MBytes       
+[  5]   3.00-4.00   sec  7.53 GBytes  64.7 Gbits/sec    0   3.15 MBytes       
+[  5]   4.00-5.00   sec  7.52 GBytes  64.6 Gbits/sec    0   3.15 MBytes       
+[  5]   5.00-6.00   sec  7.52 GBytes  64.6 Gbits/sec    0   3.15 MBytes       
+[  5]   6.00-7.00   sec  7.53 GBytes  64.7 Gbits/sec    0   3.15 MBytes       
+[  5]   7.00-8.00   sec  7.57 GBytes  65.0 Gbits/sec    0   3.15 MBytes       
+[  5]   8.00-9.00   sec  7.50 GBytes  64.4 Gbits/sec    0   3.16 MBytes       
+[  5]   9.00-10.00  sec  7.51 GBytes  64.5 Gbits/sec    0   3.16 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  75.2 GBytes  64.6 Gbits/sec   24             sender
+[  5]   0.00-10.00  sec  75.2 GBytes  64.6 Gbits/sec                  receiver
+
+iperf Done.
+```
+
+**Better**
+```
+jordan@crow:~$ iperf3 -c 192.168.88.3 -t 10
+Connecting to host 192.168.88.3, port 5201
+[  5] local 192.168.88.2 port 54042 connected to 192.168.88.3 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  11.2 GBytes  95.7 Gbits/sec   49   8.09 MBytes       
+[  5]   1.00-2.00   sec  9.74 GBytes  83.7 Gbits/sec    0   6.44 MBytes       
+[  5]   2.00-3.00   sec  9.72 GBytes  83.6 Gbits/sec    0   5.96 MBytes       
+[  5]   3.00-4.00   sec  9.76 GBytes  83.8 Gbits/sec    0   6.49 MBytes       
+[  5]   4.00-5.00   sec  9.74 GBytes  83.7 Gbits/sec    0   6.15 MBytes       
+[  5]   5.00-6.00   sec  9.74 GBytes  83.6 Gbits/sec    0   6.05 MBytes       
+[  5]   6.00-7.00   sec  9.77 GBytes  83.9 Gbits/sec   15   6.14 MBytes       
+[  5]   7.00-8.00   sec  9.74 GBytes  83.6 Gbits/sec    0   6.16 MBytes       
+[  5]   8.00-9.00   sec  9.73 GBytes  83.6 Gbits/sec    0   5.73 MBytes       
+[  5]   9.00-10.00  sec  9.75 GBytes  83.8 Gbits/sec    0   5.99 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec  98.9 GBytes  84.9 Gbits/sec   64             sender
+[  5]   0.00-10.00  sec  98.8 GBytes  84.9 Gbits/sec                  receiver
+
+iperf Done.
+jordan@crow:~$ 
+```
+
+**Best**
+```
+jordan@crow:~$ iperf3 -c 192.168.88.3 -t 10
+Connecting to host 192.168.88.3, port 5201
+[  5] local 192.168.88.2 port 35222 connected to 192.168.88.3 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  11.3 GBytes  97.1 Gbits/sec  124   10.0 MBytes       
+[  5]   1.00-2.00   sec  11.5 GBytes  98.9 Gbits/sec    0   9.75 MBytes       
+[  5]   2.00-3.00   sec  11.5 GBytes  98.8 Gbits/sec    0   8.77 MBytes       
+[  5]   3.00-4.00   sec  11.5 GBytes  98.9 Gbits/sec    0   8.12 MBytes       
+[  5]   4.00-5.00   sec  11.5 GBytes  98.9 Gbits/sec    0   10.5 MBytes       
+[  5]   5.00-6.00   sec  11.5 GBytes  98.8 Gbits/sec    0   9.48 MBytes       
+[  5]   6.00-7.00   sec  11.5 GBytes  99.0 Gbits/sec    0   8.33 MBytes       
+[  5]   7.00-8.00   sec  11.5 GBytes  98.9 Gbits/sec    0   10.7 MBytes       
+[  5]   8.00-9.00   sec  11.5 GBytes  98.9 Gbits/sec    0   9.96 MBytes       
+[  5]   9.00-10.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.15 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-10.00  sec   115 GBytes  98.8 Gbits/sec  124             sender
+[  5]   0.00-10.00  sec   115 GBytes  98.8 Gbits/sec                  receiver
+
+iperf Done.
+jordan@crow:~$ 
+```
+
+This was puzzling, so I started looking for something that correlated with this
+pattern. Observing htop, a pattern soon emerged.
+
+**Worst**
+
+![alt](/images/posts/3/htop-worst.png)
+
+These runs correlated with heavy activation on a single CPU core with little else. 
+
+**Better**
+
+![alt](/images/posts/3/htop-better.png)
+
+These runs correlated with activation on at least two CPU cores split between
+cores 0-5 and 6-11. In other words, cores were active in both of these ranges.
+
+**Best**
+
+![alt](/images/posts/3/htop-best.png)
+
+These runs correlated with two or more cores active in either 0-5 or 6-11 but
+not both.
+
+Observing `/proc/interrupts` at the same time, I saw that the active cores
+correlated to those being used to handle IRQs. I suspected that some
+cache-locality issue was to blame for the discrepency between the *better* and
+*best* runs. After some research, I found that the cores on Ryzen CPUs are
+split across different *CCDs* each with their own local L3 cache. In the case
+of the 9900x, cores 0-5 belong to CCD 0 and cores 6-11 belong to CCD 1. There
+is significant cross-core latency when cores across CCDs need to communicate. It
+turns out that the cross-CCD latencies [were particularly bad](https://www.anandtech.com/show/21524/the-amd-ryzen-9-9950x-and-ryzen-9-9900x-review/3)
+with the 9900X and 9950X with AMD later releasing a microcode update to address
+this.
+
+Using this handy [core-to-core-latency](https://github.com/nviennot/core-to-core-latency)
+tool I was able to measure latencies consistent with those I found in the wild.
 
 ```
-s2:  [SUM]   0.00-60.00  sec   310 GBytes  44.4 Gbits/sec  80638             sender
-s2:  [SUM]   0.00-60.00  sec   310 GBytes  44.4 Gbits/sec                  receiver
-...
-s1:  [SUM]   0.00-60.00  sec   369 GBytes  52.8 Gbits/sec  96155             sender
-s1:  [SUM]   0.00-60.00  sec   369 GBytes  52.8 Gbits/sec                  receiver
+jordan@vulture:~$ core-to-core-latency
+CPU: AMD Ryzen 9 9900X 12-Core Processor
+Num cores: 12
+Num iterations per samples: 1000
+Num samples: 300
+
+1) CAS latency on a single shared cache line
+
+           0       1       2       3       4       5       6       7       8       9      10      11   
+      0
+      1   19±0 
+      2   19±0    20±0 
+      3   20±0    18±0    21±0 
+      4   19±0    21±0    18±0    20±0 
+      5   22±0    19±0    19±0    21±0    22±0 
+      6  214±0   221±0   214±0   221±0   207±0   213±0 
+      7  222±0   219±0   224±0   219±0   217±0   225±0    20±0 
+      8  210±0   228±0   206±0   226±0   207±0   209±0    19±0    22±0 
+      9  219±0   228±0   216±0   219±0   210±0   216±0    21±0    19±0    22±0 
+     10  211±0   214±0   208±0   212±0   216±0   217±0    20±0    23±0    20±0    20±0 
+     11  215±0   216±0   214±0   217±0   211±0   214±0    23±0    21±0    20±0    23±0    23±0 
+
+    Min  latency: 18.2ns ±0.0 cores: (4,2)
+    Max  latency: 228.4ns ±0.4 cores: (8,1)
+    Mean latency: 127.1ns
 ```
+
+According to online reports, AMD's microcode update brings the latencies down
+from ~220ns to a more reasonable 75ns; however, I'm not yet able to get this
+update until ASRock Rack releases a BIOS update. Even so, to get the best
+and most consistent single-core performance I'd need to make sure `iperf3 -s`
+was running on the same CCD where IRQs are handled. In other words, I'd need
+to tune the IRQ affinity for the Mellanox driver.
+
+Inspecting the difference between the *worst* and *best* run, the difference
+seemed to be that in the worst runs IRQs were being handled on the core running
+the iperf3 server while in the best runs IRQs were processed on other cores on
+the same CCD. There simply wasn't enough headroom on that core to process both
+without sacrificing throughput. To ensure consistent results from this
+particular benchmark, I'd need to set the IRQ affinity to cores 7-11, for
+example, and pin the iperf3 server to core the unused core, 6.
 
 * TODO: Tinkering with IRQ affinity
 * TODO: Effects of core-to-core latency.
