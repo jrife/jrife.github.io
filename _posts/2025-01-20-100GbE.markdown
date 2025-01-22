@@ -209,6 +209,26 @@ links you can ignore everything except qsfp28-1-1, qsfp28-2-1, etc.
 
 ![alt](/images/posts/3/interface-list.png)
 
+Then I set the MTU on each machine to 9000 for the 100 Gb interfaces to fully
+take advantage of jumbo frames.
+
+```
+jordan@crow:~$ ip link
+...
+4: enp1s0f0np0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether b8:3f:d2:ba:a6:a6 brd ff:ff:ff:ff:ff:ff
+...
+jordan@crow:~$ 
+```
+
+```
+jordan@vulture:~$ ip link
+...
+4: enp1s0f0np0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9000 qdisc mq state UP mode DEFAULT group default qlen 1000
+...
+jordan@vulture:~$ 
+```
+
 ###### Thermal Performance
 Before doing any serious benchmarking I wanted to test the thermals. I was less
 concerned with CPU thermals than NIC thermals. The
@@ -384,7 +404,7 @@ These runs correlated with two or more cores active in either 0-5 or 6-11 but
 not both.
 
 Observing `/proc/interrupts` at the same time, I saw that the active cores
-correlated to those being used to handle IRQs. I suspected that some
+correlated to those being used to handle IRQs [1]. I suspected that some
 cache-locality issue was to blame for the discrepency between the *better* and
 *best* runs. After some research, I found that the cores on Ryzen CPUs are
 split across different *CCDs* each with their own local L3 cache. In the case
@@ -393,6 +413,15 @@ is significant cross-core latency when cores across CCDs need to communicate. It
 turns out that the cross-CCD latencies [were particularly bad](https://www.anandtech.com/show/21524/the-amd-ryzen-9-9950x-and-ryzen-9-9900x-review/3)
 with the 9900X and 9950X with AMD later releasing a microcode update to address
 this.
+
+*[1] IRQs are interrupt requests. When a hardware device such as a NIC receives
+data it triggers a hardware interrupt. The interrupt handler then does any work
+that needs doing. In the case of networking devices, the driver needs to process
+incoming packets and pass them along to the kernel's networking stack for
+delivery or further processing. IRQs can be distributed across multiple cores.
+This is a slight simplification, but gets the idea across. In reality hardware
+interrupts are disabled once the kernel knows there is data pending until such
+time that the kernel can process the packet backlog. See [NAPI](https://docs.kernel.org/networking/napi.html).*
 
 Using this handy [core-to-core-latency](https://github.com/nviennot/core-to-core-latency)
 tool I was able to measure latencies consistent with those I found in the wild.
@@ -429,16 +458,236 @@ According to online reports, AMD's microcode update brings the latencies down
 from ~220ns to a more reasonable 75ns; however, I'm not yet able to get this
 update until ASRock Rack releases a BIOS update. Even so, to get the best
 and most consistent single-core performance I'd need to make sure `iperf3 -s`
-was running on the same CCD where IRQs are handled. In other words, I'd need
-to tune the IRQ affinity for the Mellanox driver.
+was running on the same CCD where IRQs are handled to get the best CPU cache
+performance.
 
-Inspecting the difference between the *worst* and *best* run, the difference
-seemed to be that in the worst runs IRQs were being handled on the core running
-the iperf3 server while in the best runs IRQs were processed on other cores on
-the same CCD. There simply wasn't enough headroom on that core to process both
-without sacrificing throughput. To ensure consistent results from this
-particular benchmark, I'd need to set the IRQ affinity to cores 7-11, for
-example, and pin the iperf3 server to core the unused core, 6.
+Comparing the the *worst* and *best* run, the difference seemed to be that in
+the worst runs IRQs were being handled on the core running the iperf3 server
+while in the best runs IRQs were processed on other cores on the same CCD. There
+simply wasn't enough headroom on that core to process both without sacrificing
+throughput. To ensure consistent results from this particular benchmark, I'd
+also need to make sure to avoid handling IRQs on the same core where my iperf3
+server was running.
 
-* TODO: Tinkering with IRQ affinity
-* TODO: Effects of core-to-core latency.
+By default the Mellanox driver (`mlx5_core`) distributes IRQs across all cores.
+
+```
+root@crow:/home/jordan# cat /proc/interrupts | grep mlx
+  98:          0          0          0          0          0          0          0          0          0          0      23274          0  IR-PCI-MSIX-0000:01:00.0    0-edge      mlx5_async0@pci:0000:01:00.0
+  99:        324          0          0          0          0          0          0       4360          0          0          0          0  IR-PCI-MSIX-0000:01:00.0    1-edge      mlx5_comp0@pci:0000:01:00.0
+ 101:          0          0          0          0          0          0          0          0          0          0          0       8563  IR-PCI-MSIX-0000:01:00.1    0-edge      mlx5_async0@pci:0000:01:00.1
+ 102:          0          0          0          0          0          0          0          0          0          0          0          0  IR-PCI-MSIX-0000:01:00.1    1-edge      mlx5_comp0@pci:0000:01:00.1
+ 109:          0          2          0          0          0          0          0          0     395218          0          0          0  IR-PCI-MSIX-0000:01:00.0    2-edge      mlx5_comp1@pci:0000:01:00.0
+ 110:          0          0          2          0          0          0          0          0          0     416057          0          0  IR-PCI-MSIX-0000:01:00.0    3-edge      mlx5_comp2@pci:0000:01:00.0
+ 111:          0          0          0          2          0          0          0          0          0          0          0          0  IR-PCI-MSIX-0000:01:00.0    4-edge      mlx5_comp3@pci:0000:01:00.0
+ 112:          0          0          0          0          2          0          0          0          0          0          0         12  IR-PCI-MSIX-0000:01:00.0    5-edge      mlx5_comp4@pci:0000:01:00.0
+ 113:          0          0          0          0          0          2          0         12          0          0          0          0  IR-PCI-MSIX-0000:01:00.0    6-edge      mlx5_comp5@pci:0000:01:00.0
+ 114:          0          0          0          0          0          0         10          0    1024467          0          0          0  IR-PCI-MSIX-0000:01:00.0    7-edge      mlx5_comp6@pci:0000:01:00.0
+ 115:          0          0          0          0          0          0          0          2          0     399417          0          0  IR-PCI-MSIX-0000:01:00.0    8-edge      mlx5_comp7@pci:0000:01:00.0
+ 116:          0          0          0          0          0          0          0          0          2          0     770067          0  IR-PCI-MSIX-0000:01:00.0    9-edge      mlx5_comp8@pci:0000:01:00.0
+ 117:          0          0          0          0          0          0          0          0          0          7          0     651437  IR-PCI-MSIX-0000:01:00.0   10-edge      mlx5_comp9@pci:0000:01:00.0
+ 118:          0          0          0          0          0          0          0     417457          0          0         22          0  IR-PCI-MSIX-0000:01:00.0   11-edge      mlx5_comp10@pci:0000:01:00.0
+ 119:          0          0          0          0          0          0          0          0     146064          0          0          2  IR-PCI-MSIX-0000:01:00.0   12-edge      mlx5_comp11@pci:0000:01:00.0
+root@crow:/home/jordan# 
+```
+
+This can be tuned by setting the IRQ affinity for each of the interrupts to
+choose the core where each IRQ is processed.
+
+```
+root@crow:/home/jordan# echo "800" > /proc/irq/119/smp_affinity
+```
+
+An easier alternative is to use the [mlnx-tools](https://github.com/Mellanox/mlnx-tools)
+scripts which automate this. I used the `set_irq_affinity_cpulist.sh` script to
+ensure that only cores 7-11 processed IRQs.
+
+```
+jordan@crow:~/mlnx-tools/sbin$ sudo ./set_irq_affinity_cpulist.sh 7-11 enp1s0f0np0
+[sudo] password for jordan: 
+Discovered irqs for enp1s0f0np0: 99 109 110 111 112 113 114 115 116 117 118 119
+Assign irq 99 core_id 7
+Assign irq 109 core_id 8
+Assign irq 110 core_id 9
+Assign irq 111 core_id 10
+Assign irq 112 core_id 11
+Assign irq 113 core_id 7
+Assign irq 114 core_id 8
+Assign irq 115 core_id 9
+Assign irq 116 core_id 10
+Assign irq 117 core_id 11
+Assign irq 118 core_id 7
+Assign irq 119 core_id 8
+
+done.
+jordan@crow:~/mlnx-tools/sbin$
+```
+
+```
+jordan@vulture:~/mlnx-tools/sbin$ sudo ./set_irq_affinity_cpulist.sh 7-11 enp1s0f0np0 
+[sudo] password for jordan: 
+Discovered irqs for enp1s0f0np0: 103 113 114 115 116 117 118 119 120 121 122 123
+Assign irq 103 core_id 7
+Assign irq 113 core_id 8
+Assign irq 114 core_id 9
+Assign irq 115 core_id 10
+Assign irq 116 core_id 11
+Assign irq 117 core_id 7
+Assign irq 118 core_id 8
+Assign irq 119 core_id 9
+Assign irq 120 core_id 10
+Assign irq 121 core_id 11
+Assign irq 122 core_id 7
+Assign irq 123 core_id 8
+
+done.
+jordan@vulture:~/mlnx-tools/sbin$
+```
+
+I tried running iperf3 again pinning both the client and the server to core six
+on their respective machines.
+
+```
+jordan@crow:~/mlnx-tools/sbin$ iperf3 -c 192.168.88.3 -t 60 -A 6,6
+Connecting to host 192.168.88.3, port 5201
+[  5] local 192.168.88.2 port 39122 connected to 192.168.88.3 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  10.9 GBytes  93.6 Gbits/sec   24   8.80 MBytes       
+[  5]   1.00-2.00   sec  11.5 GBytes  99.0 Gbits/sec    0   8.00 MBytes       
+[  5]   2.00-3.00   sec  11.2 GBytes  95.7 Gbits/sec   11   7.41 MBytes       
+[  5]   3.00-4.00   sec  11.5 GBytes  98.6 Gbits/sec    1   8.54 MBytes       
+[  5]   4.00-5.00   sec  11.5 GBytes  99.0 Gbits/sec    0   10.7 MBytes       
+[  5]   5.00-6.00   sec  11.5 GBytes  98.8 Gbits/sec    1   7.83 MBytes       
+[  5]   6.00-7.00   sec  11.5 GBytes  98.9 Gbits/sec    1   7.81 MBytes       
+[  5]   7.00-8.00   sec  11.4 GBytes  97.9 Gbits/sec    2   7.65 MBytes       
+[  5]   8.00-9.00   sec  11.5 GBytes  99.0 Gbits/sec    1   8.11 MBytes       
+[  5]   9.00-10.00  sec  11.3 GBytes  97.1 Gbits/sec    3   6.48 MBytes       
+[  5]  10.00-11.00  sec  11.5 GBytes  98.5 Gbits/sec    2   7.98 MBytes       
+[  5]  11.00-12.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.6 MBytes       
+[  5]  12.00-13.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.1 MBytes       
+[  5]  13.00-14.00  sec  11.5 GBytes  98.6 Gbits/sec    2   8.59 MBytes       
+[  5]  14.00-15.00  sec  11.3 GBytes  96.9 Gbits/sec   14   6.48 MBytes       
+[  5]  15.00-16.00  sec  11.5 GBytes  99.0 Gbits/sec    6   7.56 MBytes       
+[  5]  16.00-17.00  sec  11.4 GBytes  98.3 Gbits/sec    3   7.54 MBytes       
+[  5]  17.00-18.00  sec  11.5 GBytes  99.0 Gbits/sec    1   10.4 MBytes       
+[  5]  18.00-19.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.38 MBytes       
+[  5]  19.00-20.00  sec  11.5 GBytes  98.9 Gbits/sec    0   8.00 MBytes       
+[  5]  20.00-21.00  sec  11.5 GBytes  99.0 Gbits/sec    0   8.55 MBytes       
+[  5]  21.00-22.00  sec  11.5 GBytes  98.5 Gbits/sec    1   7.54 MBytes       
+[  5]  22.00-23.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.14 MBytes       
+[  5]  23.00-24.00  sec  11.5 GBytes  98.9 Gbits/sec    0   7.43 MBytes       
+[  5]  24.00-25.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.72 MBytes       
+[  5]  25.00-26.00  sec  11.4 GBytes  97.9 Gbits/sec    2   8.11 MBytes       
+[  5]  26.00-27.00  sec  11.5 GBytes  98.9 Gbits/sec    1   8.79 MBytes       
+[  5]  27.00-28.00  sec  11.5 GBytes  98.9 Gbits/sec    1   9.27 MBytes       
+[  5]  28.00-29.00  sec  11.4 GBytes  98.3 Gbits/sec    1   7.87 MBytes       
+[  5]  29.00-30.00  sec  11.5 GBytes  98.7 Gbits/sec    1   9.05 MBytes       
+[  5]  30.00-31.00  sec  11.5 GBytes  99.0 Gbits/sec    0   6.95 MBytes       
+[  5]  31.00-32.00  sec  11.5 GBytes  98.9 Gbits/sec    0   7.71 MBytes       
+[  5]  32.00-33.00  sec  11.5 GBytes  99.0 Gbits/sec    0   8.65 MBytes       
+[  5]  33.00-34.00  sec  11.4 GBytes  98.2 Gbits/sec    1   10.5 MBytes       
+[  5]  34.00-35.00  sec  11.5 GBytes  98.6 Gbits/sec    2   7.48 MBytes       
+[  5]  35.00-36.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.3 MBytes       
+[  5]  36.00-37.00  sec  11.5 GBytes  99.0 Gbits/sec    0   6.85 MBytes       
+[  5]  37.00-38.00  sec  11.5 GBytes  98.7 Gbits/sec   12   8.39 MBytes       
+[  5]  38.00-39.00  sec  11.5 GBytes  98.6 Gbits/sec    1   4.10 MBytes       
+[  5]  39.00-40.00  sec  11.4 GBytes  98.2 Gbits/sec    4   10.0 MBytes       
+[  5]  40.00-41.00  sec  11.5 GBytes  99.0 Gbits/sec    2   9.11 MBytes       
+[  5]  41.00-42.00  sec  11.5 GBytes  98.6 Gbits/sec    3   5.10 MBytes       
+[  5]  42.00-43.00  sec  11.5 GBytes  98.5 Gbits/sec    1   8.82 MBytes       
+[  5]  43.00-44.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.03 MBytes       
+[  5]  44.00-45.00  sec  11.5 GBytes  98.5 Gbits/sec    1   7.17 MBytes       
+[  5]  45.00-46.00  sec  11.5 GBytes  99.1 Gbits/sec    0   9.69 MBytes       
+[  5]  46.00-47.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.21 MBytes       
+[  5]  47.00-48.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.46 MBytes       
+[  5]  48.00-49.00  sec  11.5 GBytes  98.9 Gbits/sec    1   9.57 MBytes       
+[  5]  49.00-50.00  sec  11.5 GBytes  99.0 Gbits/sec    6   8.93 MBytes       
+[  5]  50.00-51.00  sec  11.4 GBytes  98.3 Gbits/sec    2   6.60 MBytes       
+[  5]  51.00-52.00  sec  11.5 GBytes  98.9 Gbits/sec    0   9.57 MBytes       
+[  5]  52.00-53.00  sec  11.5 GBytes  98.9 Gbits/sec    0   8.88 MBytes       
+[  5]  53.00-54.00  sec  11.5 GBytes  98.6 Gbits/sec    2   5.09 MBytes       
+[  5]  54.00-55.00  sec  11.4 GBytes  98.2 Gbits/sec    1   8.41 MBytes       
+[  5]  55.00-56.00  sec  11.5 GBytes  99.0 Gbits/sec    1   9.13 MBytes       
+[  5]  56.00-57.00  sec  11.5 GBytes  98.6 Gbits/sec    2   5.16 MBytes       
+[  5]  57.00-58.00  sec  11.5 GBytes  98.9 Gbits/sec    0   8.34 MBytes       
+[  5]  58.00-59.00  sec  11.5 GBytes  98.3 Gbits/sec    2   8.52 MBytes       
+[  5]  59.00-60.00  sec  11.4 GBytes  97.9 Gbits/sec    3   7.39 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-60.00  sec   688 GBytes  98.5 Gbits/sec  126             sender
+[  5]   0.00-60.00  sec   688 GBytes  98.5 Gbits/sec                  receiver
+
+iperf Done.
+jordan@crow:~/mlnx-tools/sbin$ iperf3 -c 192.168.88.3 -t 60 -A 6,6
+Connecting to host 192.168.88.3, port 5201
+[  5] local 192.168.88.2 port 46964 connected to 192.168.88.3 port 5201
+[ ID] Interval           Transfer     Bitrate         Retr  Cwnd
+[  5]   0.00-1.00   sec  10.9 GBytes  93.6 Gbits/sec   10   6.81 MBytes       
+[  5]   1.00-2.00   sec  11.4 GBytes  98.1 Gbits/sec    3   6.72 MBytes       
+[  5]   2.00-3.00   sec  11.5 GBytes  98.6 Gbits/sec    1   8.18 MBytes       
+[  5]   3.00-4.00   sec  11.5 GBytes  99.0 Gbits/sec    1   8.87 MBytes       
+[  5]   4.00-5.00   sec  11.4 GBytes  97.7 Gbits/sec    2   8.23 MBytes       
+[  5]   5.00-6.00   sec  11.4 GBytes  98.2 Gbits/sec    2   7.99 MBytes       
+[  5]   6.00-7.00   sec  11.5 GBytes  98.3 Gbits/sec    2   10.0 MBytes       
+[  5]   7.00-8.00   sec  11.5 GBytes  99.0 Gbits/sec    0   9.28 MBytes       
+[  5]   8.00-9.00   sec  11.5 GBytes  99.0 Gbits/sec    0   8.90 MBytes       
+[  5]   9.00-10.00  sec  11.5 GBytes  99.0 Gbits/sec    0   8.38 MBytes       
+[  5]  10.00-11.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.59 MBytes       
+[  5]  11.00-12.00  sec  11.5 GBytes  98.9 Gbits/sec    0   10.3 MBytes       
+[  5]  12.00-13.00  sec  11.5 GBytes  98.7 Gbits/sec    2   7.11 MBytes       
+[  5]  13.00-14.00  sec  11.5 GBytes  98.9 Gbits/sec    1   7.36 MBytes       
+[  5]  14.00-15.00  sec  11.6 GBytes  99.0 Gbits/sec    1   6.83 MBytes       
+[  5]  15.00-16.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.69 MBytes       
+[  5]  16.00-17.00  sec  11.5 GBytes  99.0 Gbits/sec    6   10.2 MBytes       
+[  5]  17.00-18.00  sec  11.5 GBytes  98.6 Gbits/sec    1   10.8 MBytes       
+[  5]  18.00-19.00  sec  11.4 GBytes  98.0 Gbits/sec    7   8.29 MBytes       
+[  5]  19.00-20.00  sec  11.5 GBytes  99.0 Gbits/sec    1   7.97 MBytes       
+[  5]  20.00-21.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.1 MBytes       
+[  5]  21.00-22.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.00 MBytes       
+[  5]  22.00-23.00  sec  11.4 GBytes  98.1 Gbits/sec    1   8.00 MBytes       
+[  5]  23.00-24.00  sec  11.5 GBytes  98.6 Gbits/sec    1   8.90 MBytes       
+[  5]  24.00-25.00  sec  11.5 GBytes  99.0 Gbits/sec    1   8.67 MBytes       
+[  5]  25.00-26.00  sec  11.5 GBytes  98.9 Gbits/sec    1   9.34 MBytes       
+[  5]  26.00-27.00  sec  11.4 GBytes  98.1 Gbits/sec    1   6.32 MBytes       
+[  5]  27.00-28.00  sec  11.5 GBytes  98.5 Gbits/sec    0   8.35 MBytes       
+[  5]  28.00-29.00  sec  11.5 GBytes  99.0 Gbits/sec    1   8.34 MBytes       
+[  5]  29.00-30.00  sec  11.5 GBytes  98.9 Gbits/sec    1   8.52 MBytes       
+[  5]  30.00-31.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.15 MBytes       
+[  5]  31.00-32.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.3 MBytes       
+[  5]  32.00-33.00  sec  11.5 GBytes  99.0 Gbits/sec    1   10.4 MBytes       
+[  5]  33.00-34.00  sec  11.5 GBytes  98.8 Gbits/sec    1   7.54 MBytes       
+[  5]  34.00-35.00  sec  11.5 GBytes  99.0 Gbits/sec    1   8.02 MBytes       
+[  5]  35.00-36.00  sec  11.5 GBytes  98.5 Gbits/sec    1   9.22 MBytes       
+[  5]  36.00-37.00  sec  11.5 GBytes  99.0 Gbits/sec    0   8.99 MBytes       
+[  5]  37.00-38.00  sec  11.5 GBytes  98.5 Gbits/sec    1   6.74 MBytes       
+[  5]  38.00-39.00  sec  11.4 GBytes  98.1 Gbits/sec    2   6.75 MBytes       
+[  5]  39.00-40.00  sec  11.4 GBytes  97.6 Gbits/sec    7   8.54 MBytes       
+[  5]  40.00-41.00  sec  11.4 GBytes  98.0 Gbits/sec    0   10.2 MBytes       
+[  5]  41.00-42.00  sec  11.5 GBytes  99.1 Gbits/sec    0   9.98 MBytes       
+[  5]  42.00-43.00  sec  11.5 GBytes  98.8 Gbits/sec    1   7.42 MBytes       
+[  5]  43.00-44.00  sec  11.5 GBytes  99.0 Gbits/sec    1   7.33 MBytes       
+[  5]  44.00-45.00  sec  11.5 GBytes  99.0 Gbits/sec    0   10.2 MBytes       
+[  5]  45.00-46.00  sec  11.5 GBytes  98.9 Gbits/sec    0   9.76 MBytes       
+[  5]  46.00-47.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.22 MBytes       
+[  5]  47.00-48.00  sec  11.5 GBytes  99.0 Gbits/sec    0   8.49 MBytes       
+[  5]  48.00-49.00  sec  11.5 GBytes  98.9 Gbits/sec    1   8.48 MBytes       
+[  5]  49.00-50.00  sec  11.5 GBytes  98.9 Gbits/sec    1   8.79 MBytes       
+[  5]  50.00-51.00  sec  11.5 GBytes  99.0 Gbits/sec    0   7.81 MBytes       
+[  5]  51.00-52.00  sec  11.5 GBytes  98.9 Gbits/sec    6   8.18 MBytes       
+[  5]  52.00-53.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.89 MBytes       
+[  5]  53.00-54.00  sec  11.5 GBytes  98.9 Gbits/sec    1   6.51 MBytes       
+[  5]  54.00-55.00  sec  11.5 GBytes  98.6 Gbits/sec    1   7.72 MBytes       
+[  5]  55.00-56.00  sec  11.5 GBytes  98.7 Gbits/sec    1   8.94 MBytes       
+[  5]  56.00-57.00  sec  11.5 GBytes  98.7 Gbits/sec    1   9.61 MBytes       
+[  5]  57.00-58.00  sec  11.5 GBytes  99.0 Gbits/sec    0   9.98 MBytes       
+[  5]  58.00-59.00  sec  11.5 GBytes  98.9 Gbits/sec    2   7.26 MBytes       
+[  5]  59.00-60.00  sec  11.5 GBytes  98.9 Gbits/sec    1   7.77 MBytes       
+- - - - - - - - - - - - - - - - - - - - - - - - -
+[ ID] Interval           Transfer     Bitrate         Retr
+[  5]   0.00-60.00  sec   689 GBytes  98.7 Gbits/sec   78             sender
+[  5]   0.00-60.00  sec   689 GBytes  98.6 Gbits/sec                  receiver
+
+iperf Done.
+```
+
+I could now get a very consistent ~98.5 Gbps.
