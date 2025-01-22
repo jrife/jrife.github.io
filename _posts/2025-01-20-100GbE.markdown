@@ -71,7 +71,7 @@ them. Beyond the obvious need for 100 GbE I wanted a card that at least
 supported SR-IOV and RoCE, two features I wanted to play around and experiment
 with. Dual port was a bonus if I could find it for the right price, as I wanted
 to play around with redundant and multipath setups. The Mellanox MCX516A-CCAT
-fit the bill, and I was able to find a good deal through Server Supply.
+fit the bill, and I was able to find a good deal.
 
 ![alt](/images/posts/3/cards.jpeg)
 
@@ -86,10 +86,9 @@ data ports of each machine to my home network. The 100 GbE network would remain
 isolated for the time being.
 
 ###### Memory
-I just looked for whatever I could find for cheap. I found a local supplier of
-server memory on eBay called [Memory Bay](https://www.membay.com/). I wanted
-at least 32 GB of memory per machine to start with. It gave me enough head room
-to run a few VMs if I wanted without breaking the bank.
+I just looked for whatever I could find for cheap on eBay. I wanted at least 32
+GB of memory per machine to start with. It gave me enough head room to run a few
+VMs if I wanted without breaking the bank.
 
 ###### Cooling
 I just bought a standard CPU cooler and case fans. One special consideration I
