@@ -502,6 +502,7 @@ An easier alternative is to use the [mlnx-tools](https://github.com/Mellanox/mln
 scripts which automate this. I used the `set_irq_affinity_cpulist.sh` script to
 ensure that only cores 7-11 processed IRQs.
 
+**Machine 1 (crow)**
 ```
 jordan@crow:~/mlnx-tools/sbin$ sudo ./set_irq_affinity_cpulist.sh 7-11 enp1s0f0np0
 [sudo] password for jordan: 
@@ -523,6 +524,7 @@ done.
 jordan@crow:~/mlnx-tools/sbin$
 ```
 
+**Machine 2 (vulture)**
 ```
 jordan@vulture:~/mlnx-tools/sbin$ sudo ./set_irq_affinity_cpulist.sh 7-11 enp1s0f0np0 
 [sudo] password for jordan: 
@@ -691,3 +693,20 @@ iperf Done.
 ```
 
 I could now get a very consistent ~98.5 Gbps.
+
+###### Other Observations
+During the course of tuning I discovered a BIOS setting that actually presents
+the CCDs on the CPU as different [NUMA](https://en.wikipedia.org/wiki/Non-uniform_memory_access)
+nodes. I thought this might improve things a bit without manual IRQ affinity
+configuration, giving the operating system and driver some hint about cross-core
+performance. Anecdotally, I seemed to get more of the *best* runs but still
+occasionally saw the *worst* and *better* runs still. I'm not too familiar with
+the Mellanox driver, so I'll have to do a bit of digging here to learn more.
+
+###### Conclusion
+I'm happy the build was successful. I learned a lot through the tuning process
+and now have a consistent and stable baseline on top of which to experiment
+further with 100 Gb networking. In future posts I'm hoping to explore some more
+topics related to high-speed networking and performance tuning/profiling.
+
+*-Jordan*

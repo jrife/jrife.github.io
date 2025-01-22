@@ -12,3 +12,5 @@ This is mainly for me, but if others find the content useful then even better.
 As of now, I don't have a unifying theme for things I'll post, but I imagine a
 lot of it will be related to things that I'm working on or that am interested
 in.
+
+*-Jordan*
