@@ -110,6 +110,8 @@ Here's the network card installed in an older PC I built. I was doing some
 thermal testing to make sure the fan was keeping the NIC cool enough before the
 rest of the parts arrived for my new build.
 
+![perfection](/images/posts/3/perfection.png)
+
 ## Bill Of Materials
 
 | Component             | Type                                             | Quantity | Price         |
