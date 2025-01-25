@@ -1,9 +1,9 @@
 ---
-title: How I Became a Top Contributor to The 6.10 Kernel
+title: NFS, eBPF, And The Kernel
 slug: linux-6.10
 image: /images/posts/2.jpeg
 description: >-
-  Fixing bugs with eBPF SOCKADDR hooks.
+  How I became a top contributor to the 6.10 kernel
 tags:
   - kubernetes
   - kernel
@@ -17,7 +17,7 @@ OK, while this is *technically* true based on the [published](https://lwn.net/Ar
 statistics for the 6.10 Linux kernel, I'm hardly a core contribtor. But hey,
 I wanted a catchy title.
 
-![alt](/images/posts/6.10-contributors.png)
+![contributors](/images/posts/6.10-contributors.png)
 
 In 6.10 I made a large number of changes to the kernel selftests for BPF
 sockaddr hooks to add regression coverage for a family of issues I fixed in
@@ -91,7 +91,7 @@ All of the software-defined storage systems listed above implement
 (e.g. [nfs-ganesha](https://github.com/nfs-ganesha/nfs-ganesha)) as a pod
 beind a clusterIP [service](https://kubernetes.io/docs/concepts/services-networking/service/).
 
-![alt](/images/posts/sds.png)
+![sds](/images/posts/sds.png)
 
 In this architecture the service is used purely to provide a stable IP address
 for the NFS mounts. If the NFS server pod needs to be replaced by the storage
@@ -99,7 +99,7 @@ system due to node restarts, pod deletions, etc. this allows any mounts to
 recover as reconnection attempts on the client will be redirected to the new
 backend.
 
-![alt](/images/posts/failover.png)
+![failover](/images/posts/failover.png)
 
 Traditionally, clusterIP services were implemented by [kube-proxy](https://kubernetes.io/docs/reference/command-line-tools-reference/kube-proxy/),
 a daemon that runs on each node in the cluster. kube-proxy creates iptables
@@ -392,7 +392,7 @@ To summarize, `BPF_CGROUP_RUN_PROG_INET4_CONNECT(sk, uaddr, &addr_len)` can
 rewrite the address stored at `uaddr`, a pointer to the `address` variable
 inside `__sys_connect()`.
 
-![alt](/images/posts/syscallgraph.png)
+![syscalls](/images/posts/syscallgraph.png)
 
 If you try to connect to a the cluster IP of a service the address is rewritten
 to one of that service's endpoint addresses. All of this works pretty seamlessly
@@ -497,11 +497,11 @@ EXPORT_SYMBOL(kernel_connect);
 ```
 
 [`kernel_connect()`](https://github.com/torvalds/linux/blob/a0e3919a2df29b373b19a8fbd6e4c4c38fc10d87/net/socket.c#L3618)
-in its original form (i.e. before I fixed it) simply invoked `connect()` like we
-saw in `__sys_connect_file()`. `addr` is just a pointer to whatever parameter
-the caller passes to `kernel_connect()`. As we know from the code above,
-however, any BPF hooks that execute inside `tcp_v4_pre_connect()` may overwrite
-the contents of `*addr`!
+in its original form (before I fixed it) simply invoked `connect()` like we saw
+in `__sys_connect_file()`. `addr` is just a pointer to whatever parameter the
+caller passes to `kernel_connect()`. As we know from the code above, however,
+any BPF hooks that execute inside `tcp_v4_pre_connect()` may overwrite the
+contents of `*addr`!
 
 ```c
   return kernel_connect(sock, xs_addr(xprt), xprt->addrlen, O_NONBLOCK);
@@ -528,6 +528,7 @@ IP, the NFS mount would break forever trying to reconnect to the original pod's
 IP. Running `mount` you could even see that the IP address printed for these
 NFS mounts was the *pod* IP instead of the *service* IP.
 
+# Patching The Kernel
 This was certainly problematic. The introduction of these BPF hooks had turned
 `addr` into a mutable parameter breaking the expectations of code that used
 functions like `kernel_connect()`. The fix itself was simple, just make a copy
@@ -535,7 +536,8 @@ of `*addr` to insulate callers of `kernel_connect()` from the effects of the BPF
 hooks. This is just what my [initial patch](https://lore.kernel.org/netdev/20230821214523.720206-1-jrife@google.com/)
 did.
 
-```
+## `kernel_connect()`
+```diff
  int kernel_connect(struct socket *sock, struct sockaddr *addr, int addrlen,
  		   int flags)
  {
@@ -550,5 +552,398 @@ did.
  EXPORT_SYMBOL(kernel_connect);
 ```
 
-TODO
+But I couldn't stop there. There turned out to be similar bugs in several of the
+kernel space socket functions I mentioned above, namely `sock_sendmsg()`,
+`kernel_bind()`. After some back-and-forth [this](https://lore.kernel.org/netdev/20230926200505.2804266-1-jrife@google.com/T/#u)
+patch series was merged. In the case of `sock_sendmsg()` I was actually able to
+confirm that it caused a similar bug with UDP-mode NFS mounts.
 
+## `sock_sendmsg()`
+```diff
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -737,6 +737,14 @@ static inline int sock_sendmsg_nosec(struct socket *sock, struct msghdr *msg)
+ 	return ret;
+ }
+ 
++static int __sock_sendmsg(struct socket *sock, struct msghdr *msg)
++{
++	int err = security_socket_sendmsg(sock, msg,
++					  msg_data_left(msg));
++
++	return err ?: sock_sendmsg_nosec(sock, msg);
++}
++
+ /**
+  *	sock_sendmsg - send a message through @sock
+  *	@sock: socket
+@@ -747,10 +755,21 @@ static inline int sock_sendmsg_nosec(struct socket *sock, struct msghdr *msg)
+  */
+ int sock_sendmsg(struct socket *sock, struct msghdr *msg)
+ {
+-	int err = security_socket_sendmsg(sock, msg,
+-					  msg_data_left(msg));
++	struct sockaddr_storage *save_addr = (struct sockaddr_storage *)msg->msg_name;
++	int save_addrlen = msg->msg_namelen;
++	struct sockaddr_storage address;
++	int ret;
+ 
+-	return err ?: sock_sendmsg_nosec(sock, msg);
++	if (msg->msg_name) {
++		memcpy(&address, msg->msg_name, msg->msg_namelen);
++		msg->msg_name = &address;
++	}
++
++	ret = __sock_sendmsg(sock, msg);
++	msg->msg_name = save_addr;
++	msg->msg_namelen = save_addrlen;
++
++	return ret;
+ }
+ EXPORT_SYMBOL(sock_sendmsg);
+ 
+@@ -1138,7 +1157,7 @@ static ssize_t sock_write_iter(struct kiocb *iocb, struct iov_iter *from)
+ 	if (sock->type == SOCK_SEQPACKET)
+ 		msg.msg_flags |= MSG_EOR;
+ 
+-	res = sock_sendmsg(sock, &msg);
++	res = __sock_sendmsg(sock, &msg);
+ 	*from = msg.msg_iter;
+ 	return res;
+ }
+@@ -2174,7 +2193,7 @@ int __sys_sendto(int fd, void __user *buff, size_t len, unsigned int flags,
+ 	if (sock->file->f_flags & O_NONBLOCK)
+ 		flags |= MSG_DONTWAIT;
+ 	msg.msg_flags = flags;
+-	err = sock_sendmsg(sock, &msg);
++	err = __sock_sendmsg(sock, &msg);
+ 
+ out_put:
+ 	fput_light(sock->file, fput_needed);
+@@ -2538,7 +2557,7 @@ static int ____sys_sendmsg(struct socket *sock, struct msghdr *msg_sys,
+ 		err = sock_sendmsg_nosec(sock, msg_sys);
+ 		goto out_freectl;
+ 	}
+-	err = sock_sendmsg(sock, msg_sys);
++	err = __sock_sendmsg(sock, msg_sys);
+ 	/*
+ 	 * If this is sendmmsg() and sending to current destination address was
+ 	 * successful, remember it.
+```
+
+## `kernel_bind()`
+```diff
+--- a/net/netfilter/ipvs/ip_vs_sync.c
++++ b/net/netfilter/ipvs/ip_vs_sync.c
+@@ -1439,7 +1439,7 @@ static int bind_mcastif_addr(struct socket *sock, struct net_device *dev)
+ 	sin.sin_addr.s_addr  = addr;
+ 	sin.sin_port         = 0;
+ 
+-	return sock->ops->bind(sock, (struct sockaddr*)&sin, sizeof(sin));
++	return kernel_bind(sock, (struct sockaddr *)&sin, sizeof(sin));
+ }
+ 
+ static void get_mcast_sockaddr(union ipvs_sockaddr *sa, int *salen,
+@@ -1546,7 +1546,7 @@ static int make_receive_sock(struct netns_ipvs *ipvs, int id,
+ 
+ 	get_mcast_sockaddr(&mcast_addr, &salen, &ipvs->bcfg, id);
+ 	sock->sk->sk_bound_dev_if = dev->ifindex;
+-	result = sock->ops->bind(sock, (struct sockaddr *)&mcast_addr, salen);
++	result = kernel_bind(sock, (struct sockaddr *)&mcast_addr, salen);
+ 	if (result < 0) {
+ 		pr_err("Error binding to the multicast addr\n");
+ 		goto error;
+diff --git a/net/rds/tcp_connect.c b/net/rds/tcp_connect.c
+index d788c6d28986f..a0046e99d6df7 100644
+--- a/net/rds/tcp_connect.c
++++ b/net/rds/tcp_connect.c
+@@ -145,7 +145,7 @@ int rds_tcp_conn_path_connect(struct rds_conn_path *cp)
+ 		addrlen = sizeof(sin);
+ 	}
+ 
+-	ret = sock->ops->bind(sock, addr, addrlen);
++	ret = kernel_bind(sock, addr, addrlen);
+ 	if (ret) {
+ 		rdsdebug("bind failed with %d at address %pI6c\n",
+ 			 ret, &conn->c_laddr);
+diff --git a/net/rds/tcp_listen.c b/net/rds/tcp_listen.c
+index 014fa24418c12..53b3535a1e4a8 100644
+--- a/net/rds/tcp_listen.c
++++ b/net/rds/tcp_listen.c
+@@ -306,7 +306,7 @@ struct socket *rds_tcp_listen_init(struct net *net, bool isv6)
+ 		addr_len = sizeof(*sin);
+ 	}
+ 
+-	ret = sock->ops->bind(sock, (struct sockaddr *)&ss, addr_len);
++	ret = kernel_bind(sock, (struct sockaddr *)&ss, addr_len);
+ 	if (ret < 0) {
+ 		rdsdebug("could not bind %s listener socket: %d\n",
+ 			 isv6 ? "IPv6" : "IPv4", ret);
+diff --git a/net/socket.c b/net/socket.c
+index 107a257a75186..3408bd6bb1e5a 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -3518,7 +3518,12 @@ static long compat_sock_ioctl(struct file *file, unsigned int cmd,
+ 
+ int kernel_bind(struct socket *sock, struct sockaddr *addr, int addrlen)
+ {
+-	return READ_ONCE(sock->ops)->bind(sock, addr, addrlen);
++	struct sockaddr_storage address;
++
++	memcpy(&address, addr, addrlen);
++
++	return READ_ONCE(sock->ops)->bind(sock, (struct sockaddr *)&address,
++					  addrlen);
+ }
+ EXPORT_SYMBOL(kernel_bind);
+```
+
+## Patching Up The Call Sites
+Exploring further, there were many raw calls to `sock->ops` throughout the
+kernel. In other words, there were a lot of modules calling
+`sock->ops->connect()`, `sock->ops->bind()`, etc. instead of using
+`kernel_connect()`, `kernel_bind()`, etc. These individual call sites remained
+susceptible to the kinds of bugs I had already addressed. I'd need to patch
+these modules so that they used the safer alternatives. During the review of my
+patch series, I had originally suggested pushing the `memcpy()` deeper into the
+stack so even raw calls to `sock->ops` would be insulated, but the reviewers
+felt that it's a cleaner solution to have the copy remain at the top level
+(`kernel_connect()`, `kernel_bind()`, etc.).
+
+In the same series I had already begun this process with changes to the IPVS and
+RDS modules.
+
+```diff
+--- a/net/netfilter/ipvs/ip_vs_sync.c
++++ b/net/netfilter/ipvs/ip_vs_sync.c
+@@ -1505,8 +1505,8 @@ static int make_send_sock(struct netns_ipvs *ipvs, int id,
+ 	}
+ 
+ 	get_mcast_sockaddr(&mcast_addr, &salen, &ipvs->mcfg, id);
+-	result = sock->ops->connect(sock, (struct sockaddr *) &mcast_addr,
+-				    salen, 0);
++	result = kernel_connect(sock, (struct sockaddr *)&mcast_addr,
++				salen, 0);
+ 	if (result < 0) {
+ 		pr_err("Error connecting to the multicast addr\n");
+ 		goto error;
+diff --git a/net/rds/tcp_connect.c b/net/rds/tcp_connect.c
+index f0c477c5d1db4..d788c6d28986f 100644
+--- a/net/rds/tcp_connect.c
++++ b/net/rds/tcp_connect.c
+@@ -173,7 +173,7 @@ int rds_tcp_conn_path_connect(struct rds_conn_path *cp)
+ 	 * own the socket
+ 	 */
+ 	rds_tcp_set_callbacks(sock, cp);
+-	ret = sock->ops->connect(sock, addr, addrlen, O_NONBLOCK);
++	ret = kernel_connect(sock, addr, addrlen, O_NONBLOCK);
+ 
+ 	rdsdebug("connect to address %pI6c returned %d\n", &conn->c_faddr, ret);
+ 	if (ret == -EINPROGRESS)
+```
+
+But more patches were needed to fix up Ceph,
+
+```diff
+--- a/net/ceph/messenger.c
++++ b/net/ceph/messenger.c
+@@ -459,8 +459,8 @@ int ceph_tcp_connect(struct ceph_connection *con)
+ 	set_sock_callbacks(sock, con);
+ 
+ 	con_sock_state_connecting(con);
+-	ret = sock->ops->connect(sock, (struct sockaddr *)&ss, sizeof(ss),
+-				 O_NONBLOCK);
++	ret = kernel_connect(sock, (struct sockaddr *)&ss, sizeof(ss),
++			     O_NONBLOCK);
+ 	if (ret == -EINPROGRESS) {
+ 		dout("connect %s EINPROGRESS sk_state = %u\n",
+ 		     ceph_pr_addr(&con->peer_addr),
+```
+
+SMB,
+
+```diff
+--- a/fs/smb/client/connect.c
++++ b/fs/smb/client/connect.c
+@@ -2895,9 +2895,9 @@  bind_socket(struct TCP_Server_Info *server)
+ 	if (server->srcaddr.ss_family != AF_UNSPEC) {
+ 		/* Bind to the specified local IP address */
+ 		struct socket *socket = server->ssocket;
+-		rc = socket->ops->bind(socket,
+-				       (struct sockaddr *) &server->srcaddr,
+-				       sizeof(server->srcaddr));
++		rc = kernel_bind(socket,
++				 (struct sockaddr *) &server->srcaddr,
++				 sizeof(server->srcaddr));
+ 		if (rc < 0) {
+ 			struct sockaddr_in *saddr4;
+ 			struct sockaddr_in6 *saddr6;
+@@ -3046,8 +3046,8 @@  generic_ip_connect(struct TCP_Server_Info *server)
+ 		 socket->sk->sk_sndbuf,
+ 		 socket->sk->sk_rcvbuf, socket->sk->sk_rcvtimeo);
+ 
+-	rc = socket->ops->connect(socket, saddr, slen,
+-				  server->noblockcnt ? O_NONBLOCK : 0);
++	rc = kernel_connect(socket, saddr, slen,
++			    server->noblockcnt ? O_NONBLOCK : 0);
+ 	/*
+ 	 * When mounting SMB root file systems, we do not want to block in
+ 	 * connect. Otherwise bail out and then let cifs_reconnect() perform
+```
+
+and several others.
+
+# The Saga Continues: Test Coverage
+My job wasn't done yet. I had to make sure these issues remained fixed. There
+turned out to be a rather extensive set of BPF tests
+([`tools/testing/selftests/bpf`](https://github.com/torvalds/linux/tree/master/tools/testing/selftests/bpf))
+which are run continuously from
+[github.com/kernel-patches/bpf](https://github.com/kernel-patches/bpf). The
+automation runs the BPF test suite across a range of architectures including
+aarch64, s390x, and x86_64. I would need to extend this test suite to include
+coverage for the issues that I had fixed.
+
+My original [series](https://lore.kernel.org/bpf/20240429214529.2644801-1-jrife@google.com/T/#u)
+extended existing tests for BPF sockaddr hooks to include coverage for
+interactions between kernel socket functions (`kernel_connect()`, ...) and BPF
+hooks which change the address parameter of the call. This required some
+extensions to the BPF test kernel module. At the time, older non-CI-conformant
+tests were in the process of being migrated to the new "prog_tests" style. I had
+to fill some potholes to bridge the gap here, including this patch to make one
+of the BPF programs used in the `kernel_bind()` tests compatible with big endian
+architectures like s390x.
+
+```diff
+--- a/tools/testing/selftests/bpf/progs/bind4_prog.c
++++ b/tools/testing/selftests/bpf/progs/bind4_prog.c
+@@ -12,6 +12,8 @@
+ #include <bpf/bpf_helpers.h>
+ #include <bpf/bpf_endian.h>
+ 
++#include "bind_prog.h"
++
+ #define SERV4_IP		0xc0a801feU /* 192.168.1.254 */
+ #define SERV4_PORT		4040
+ #define SERV4_REWRITE_IP	0x7f000001U /* 127.0.0.1 */
+@@ -118,23 +120,23 @@ int bind_v4_prog(struct bpf_sock_addr *ctx)
+ 
+ 	// u8 narrow loads:
+ 	user_ip4 = 0;
+-	user_ip4 |= ((volatile __u8 *)&ctx->user_ip4)[0] << 0;
+-	user_ip4 |= ((volatile __u8 *)&ctx->user_ip4)[1] << 8;
+-	user_ip4 |= ((volatile __u8 *)&ctx->user_ip4)[2] << 16;
+-	user_ip4 |= ((volatile __u8 *)&ctx->user_ip4)[3] << 24;
++	user_ip4 |= load_byte(ctx->user_ip4, 0, sizeof(user_ip4));
++	user_ip4 |= load_byte(ctx->user_ip4, 1, sizeof(user_ip4));
++	user_ip4 |= load_byte(ctx->user_ip4, 2, sizeof(user_ip4));
++	user_ip4 |= load_byte(ctx->user_ip4, 3, sizeof(user_ip4));
+ 	if (ctx->user_ip4 != user_ip4)
+ 		return 0;
+ 
+ 	user_port = 0;
+-	user_port |= ((volatile __u8 *)&ctx->user_port)[0] << 0;
+-	user_port |= ((volatile __u8 *)&ctx->user_port)[1] << 8;
++	user_port |= load_byte(ctx->user_port, 0, sizeof(user_port));
++	user_port |= load_byte(ctx->user_port, 1, sizeof(user_port));
+ 	if (ctx->user_port != user_port)
+ 		return 0;
+ 
+ 	// u16 narrow loads:
+ 	user_ip4 = 0;
+-	user_ip4 |= ((volatile __u16 *)&ctx->user_ip4)[0] << 0;
+-	user_ip4 |= ((volatile __u16 *)&ctx->user_ip4)[1] << 16;
++	user_ip4 |= load_word(ctx->user_ip4, 0, sizeof(user_ip4));
++	user_ip4 |= load_word(ctx->user_ip4, 1, sizeof(user_ip4));
+ 	if (ctx->user_ip4 != user_ip4)
+ 		return 0;
+ 
+diff --git a/tools/testing/selftests/bpf/progs/bind6_prog.c b/tools/testing/selftests/bpf/progs/bind6_prog.c
+index d62cd9e9cf0ea..9c86c712348cf 100644
+--- a/tools/testing/selftests/bpf/progs/bind6_prog.c
++++ b/tools/testing/selftests/bpf/progs/bind6_prog.c
+@@ -12,6 +12,8 @@
+ #include <bpf/bpf_helpers.h>
+ #include <bpf/bpf_endian.h>
+ 
++#include "bind_prog.h"
++
+ #define SERV6_IP_0		0xfaceb00c /* face:b00c:1234:5678::abcd */
+ #define SERV6_IP_1		0x12345678
+ #define SERV6_IP_2		0x00000000
+@@ -129,25 +131,25 @@ int bind_v6_prog(struct bpf_sock_addr *ctx)
+ 	// u8 narrow loads:
+ 	for (i = 0; i < 4; i++) {
+ 		user_ip6 = 0;
+-		user_ip6 |= ((volatile __u8 *)&ctx->user_ip6[i])[0] << 0;
+-		user_ip6 |= ((volatile __u8 *)&ctx->user_ip6[i])[1] << 8;
+-		user_ip6 |= ((volatile __u8 *)&ctx->user_ip6[i])[2] << 16;
+-		user_ip6 |= ((volatile __u8 *)&ctx->user_ip6[i])[3] << 24;
++		user_ip6 |= load_byte(ctx->user_ip6[i], 0, sizeof(user_ip6));
++		user_ip6 |= load_byte(ctx->user_ip6[i], 1, sizeof(user_ip6));
++		user_ip6 |= load_byte(ctx->user_ip6[i], 2, sizeof(user_ip6));
++		user_ip6 |= load_byte(ctx->user_ip6[i], 3, sizeof(user_ip6));
+ 		if (ctx->user_ip6[i] != user_ip6)
+ 			return 0;
+ 	}
+ 
+ 	user_port = 0;
+-	user_port |= ((volatile __u8 *)&ctx->user_port)[0] << 0;
+-	user_port |= ((volatile __u8 *)&ctx->user_port)[1] << 8;
++	user_port |= load_byte(ctx->user_port, 0, sizeof(user_port));
++	user_port |= load_byte(ctx->user_port, 1, sizeof(user_port));
+ 	if (ctx->user_port != user_port)
+ 		return 0;
+ 
+ 	// u16 narrow loads:
+ 	for (i = 0; i < 4; i++) {
+ 		user_ip6 = 0;
+-		user_ip6 |= ((volatile __u16 *)&ctx->user_ip6[i])[0] << 0;
+-		user_ip6 |= ((volatile __u16 *)&ctx->user_ip6[i])[1] << 16;
++		user_ip6 |= load_word(ctx->user_ip6[i], 0, sizeof(user_ip6));
++		user_ip6 |= load_word(ctx->user_ip6[i], 1, sizeof(user_ip6));
+ 		if (ctx->user_ip6[i] != user_ip6)
+ 			return 0;
+ 	}
+diff --git a/tools/testing/selftests/bpf/progs/bind_prog.h b/tools/testing/selftests/bpf/progs/bind_prog.h
+new file mode 100644
+index 0000000000000..e830caa940c35
+--- /dev/null
++++ b/tools/testing/selftests/bpf/progs/bind_prog.h
+@@ -0,0 +1,19 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __BIND_PROG_H__
++#define __BIND_PROG_H__
++
++#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
++#define load_byte(src, b, s) \
++	(((volatile __u8 *)&(src))[b] << 8 * b)
++#define load_word(src, w, s) \
++	(((volatile __u16 *)&(src))[w] << 16 * w)
++#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++#define load_byte(src, b, s) \
++	(((volatile __u8 *)&(src))[(b) + (sizeof(src) - (s))] << 8 * ((s) - (b) - 1))
++#define load_word(src, w, s) \
++	(((volatile __u16 *)&(src))[w] << 16 * (((s) / 2) - (w) - 1))
++#else
++# error "Fix your compiler's __BYTE_ORDER__?!"
++#endif
++
++#endif
+```
+
+Shortly after this was merged, I finished a full migration of the old-style test
+suite for BPF sockaddr hooks in [this](https://lore.kernel.org/bpf/20240510190246.3247730-1-jrife@google.com/T/#u)
+patch series and fully retire the old test suite.
+
+# Conclusion
+This was my first *real* contribution to the kernel, other than a one line fix
+for my laptop's touchpad driver in 2010, and I'm proud to have made a meaningful
+impact. Interesting problems worth solving don't come along every day.
+
+At this point, these patches have been backported to most major distros'
+kernels and are generally available. I'm glad to say that the original bug with
+Cilium and NFS has been completely and thoroughly squashed with Cilium's
+[documentation](https://docs.cilium.io/en/latest/network/kubernetes/kubeproxy-free/#limitations)
+even listing exact kernel versions for Ubuntu and RHEL that contain the fixes.
+
+*-Jordan*

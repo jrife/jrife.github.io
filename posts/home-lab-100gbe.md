@@ -78,7 +78,7 @@ with. Dual port was a bonus if I could find it for the right price, as I wanted
 to play around with redundant and multipath setups. The Mellanox MCX516A-CCAT
 fit the bill, and I was able to find a good deal.
 
-![alt](/images/posts/3/cards.jpeg)
+![cards](/images/posts/3/cards.jpeg)
 
 ## Choosing A Switch
 As of the time of me writing this, the MikroTik CRS504-4XQ-IN really is the only
@@ -104,7 +104,7 @@ TL-C12C case fans would offer. I would need to actively cool the NICs somehow.
 I decided on the tried and true method of zip tying a 40mm Noctua PWMNF-A4x20
 PWM fan directly to the NIC's heat sink. This later proved to be effective.
 
-![alt](/images/posts/3/ziptie.jpeg)
+![ziptied](/images/posts/3/ziptie.jpeg)
 
 Here's the network card installed in an older PC I built. I was doing some
 thermal testing to make sure the fan was keeping the NIC cool enough before the
@@ -158,34 +158,34 @@ the motherboard while I was putting it into the case.
 
 ## The Result
 
-![alt](/images/posts/3/workspace1.jpeg)
+![workspace1](/images/posts/3/workspace1.jpeg)
 
 The look is fairly clean and unobtrusive. Even with both machines on, the noise
 level is hardly noticeable. The loudest part of the setup is actually the fans
 on the MikroTik which I have under my desk. Eventually I want to see if I can
 replace its fans with something quieter. 
 
-![alt](/images/posts/3/front-machines.jpeg)
+![front-machines](/images/posts/3/front-machines.jpeg)
 
 On the back you can see the two RJ45 ethernet cables leading from the management
 and data ports back to the 1 GbE switch connected to my home network. On the
 bottom you can see the QSFP28 DAC cables connecting each box to the 100 GbE
 switch.
 
-![alt](/images/posts/3/back.jpeg)
+![back-machines](/images/posts/3/back.jpeg)
 
 I have one connection from the MikroTik's management port to the 1 GbE switch,
 so that I can access the RouterOS admin interface. However, this port is not
 bridged with the QSFP28 ports on the switch. 
 
-![alt](/images/posts/3/switches.jpeg)
+![switches](/images/posts/3/switches.jpeg)
 
 The switches sit on top of my old gaming PC build under my desk. I repurposed
 that machine as a jumpbox, providing a Cloudflare tunnel into my home network
 and allowing me to connect remotely. For the most part, this box stays up even
 if I tinker with the other two.
 
-![alt](/images/posts/3/inside.jpeg)
+![inside-the-machine](/images/posts/3/inside.jpeg)
 
 And here's a look inside the case of the final build. You can see the Mellanox
 card with the zip-tied fan. I only did enough cable management to keep the
@@ -201,17 +201,17 @@ RouterOS web UI, and rebooting it. Next, I wanted to enable jumbo frames to give
 myself the best chance of pushing 100 gigabits. To do this, I first set the MTU
 of the default bridge to 9000. 
 
-![alt](/images/posts/3/bridge-mtu.png)
+![bridge-mtu](/images/posts/3/bridge-mtu.png)
 
 Next, I matched the MTU of each of the interfaces to that of the bridge.
 
-![alt](/images/posts/3/interface-mtu.png)
+![interface-mtu](/images/posts/3/interface-mtu.png)
 
 RouterOS splits each physical QSFP28 port as four logical ports. If you're not
 using a breakout cable to divide each port into two 50 Gb links or four 25 Gb
 links you can ignore everything except qsfp28-1-1, qsfp28-2-1, etc.
 
-![alt](/images/posts/3/interface-list.png)
+![interface-list](/images/posts/3/interface-list.png)
 
 Then I set the MTU on each machine to 9000 for the 100 Gb interfaces to fully
 take advantage of jumbo frames.
@@ -255,7 +255,7 @@ It was running way outside the specified range. I turned everything off to avoid
 possibly damaging the card. I zip tied the 40mm Noctua fan onto the NIC's heat
 sink and configured it to run at max speed before trying again.
 
-![alt](/images/posts/3/fan.png)
+![fan](/images/posts/3/fan.png)
 
 The card then operated at a frosty 113°F. Even under load the temperature
 remained steady. Even at full speed I barely registered the extra noise. The
@@ -389,20 +389,20 @@ pattern. Observing htop, a pattern soon emerged.
 
 ### Worst
 
-![alt](/images/posts/3/htop-worst.png)
+![htop-worst](/images/posts/3/htop-worst.png)
 
 These runs correlated with heavy activation on a single CPU core with little else. 
 
 ### Better
 
-![alt](/images/posts/3/htop-better.png)
+![htop-better](/images/posts/3/htop-better.png)
 
 These runs correlated with activation on at least two CPU cores split between
 cores 0-5 and 6-11. In other words, cores were active in both of these ranges.
 
 ### Best
 
-![alt](/images/posts/3/htop-best.png)
+![htop-best](/images/posts/3/htop-best.png)
 
 These runs correlated with two or more cores active in either 0-5 or 6-11 but
 not both.

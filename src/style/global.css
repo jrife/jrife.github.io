@@ -187,6 +187,9 @@ table {
 img {
 	max-width: 100%;
 	height: auto;
+	margin-left: auto;
+	margin-right: auto;
+	display: block;
 }
 code {
 	padding: 2px 5px;
