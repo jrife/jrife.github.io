@@ -1,0 +1,30 @@
+---
+const { slug, title, tags, image, description, date } = Astro.props;
+---
+
+<li class="post">
+	<a href={`/post/${slug}/`} class="title">{title}
+	{image && <img width={720} height={360} src={image}/>}
+	</a>
+	<time datetime={date}>
+		{
+			new Date(date).toLocaleDateString("en-us", {
+				year: "numeric",
+				month: "short",
+				day: "numeric",
+			})
+		}
+	</time>
+	<br />
+	{description && <span class="excerpt">{description}</span>}
+	<div>
+		{
+			tags &&
+				tags.map((tag) => (
+					<a class="tag" href={`/tag/${tag}`}>
+						#{tag}
+					</a>
+				))
+		}
+	</div>
+</li>
