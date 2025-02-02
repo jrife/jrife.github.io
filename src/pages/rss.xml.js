@@ -22,9 +22,6 @@ export const GET = () =>
 				pubDate: post.data.added,
 				description: post.data.description,
 				content: post.rendered.html,
-				customData: `<updated>${
-					post.data.updated ? post.data.updated : ""
-				}</updated>`,
 			};
 		}),
 		stylesheet: "/rss-styles.xsl",
