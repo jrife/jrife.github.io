@@ -42,8 +42,8 @@ if (updated) {
 		<Header />
 		<main>
 			<article>
-				<h1 class="article-title">{title}</h1>
 				{image && <img width={720} height={360} src={image} alt="" />}
+				<h1 class="article-title">{title}</h1>
 				{updated ?
 					<span><time>{added}</time>, last updated on <time>{updated}</time></span>
 					:
