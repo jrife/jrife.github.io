@@ -1,0 +1,17 @@
+---
+const { tags, all } = Astro.props;
+---
+
+<div class=`${all && "tags"}`>
+	{
+		tags &&
+			tags.map((tag) => (
+				<>
+					<a class="tag" href={`/tag/${tag}`}>
+						#{tag}
+					</a>
+					{` `}
+				</>
+			))
+	}
+</div>
